@@ -37,8 +37,9 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     smoke_radius = base_length * rng.uniform(0.15, 0.3)
     draw_smoke(tensor, centers, smoke_radius, rng)
 
-    num_trajectories = rng.integers(1, 16)
-    draw_trajectories(tensor, centers, origin, num_trajectories, rng)
+    num_straight = rng.integers(1, 16)
+    num_parabolic = rng.integers(1, 16)
+    draw_trajectories(tensor, centers, origin, num_straight, num_parabolic, rng)
 
     tensor = np.where(tensor >= 128, 255, 0).astype(np.uint8)
 
