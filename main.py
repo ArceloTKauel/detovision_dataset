@@ -46,22 +46,25 @@ def draw_center(
                 tensor[ny, nx] = 255
 
 
-def distribute_centers_along_line(
-    origin: tuple[int, int],
-    angle: float,
-    line_length: float,
+def distribute_centers_in_quadrilateral(
+    vertices: np.ndarray,
     num_points: int,
     rng: np.random.Generator,
-    lateral_spread: float = 3.0,
 ) -> list[tuple[int, int]]:
-    cy, cx = origin
+    v0, v1, v2, v3 = vertices
     centers = []
     for _ in range(num_points):
-        t = rng.uniform(-line_length / 2, line_length / 2)
-        offset = rng.uniform(-lateral_spread, lateral_spread)
-        py = int(round(cy + t * np.sin(angle) + offset * np.cos(angle)))
-        px = int(round(cx + t * np.cos(angle) - offset * np.sin(angle)))
-        centers.append((py, px))
+        if rng.random() < 0.5:
+            tri = [v0, v1, v2]
+        else:
+            tri = [v0, v2, v3]
+        r1 = rng.random()
+        r2 = rng.random()
+        if r1 + r2 > 1:
+            r1 = 1 - r1
+            r2 = 1 - r2
+        point = tri[0] + r1 * (tri[1] - tri[0]) + r2 * (tri[2] - tri[0])
+        centers.append((int(round(point[0])), int(round(point[1]))))
     return centers
 
 
@@ -140,29 +143,15 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     center_size = rng.integers(1, 3)
     draw_center(tensor, origin, center_size)
 
+    num_centers = rng.integers(40, 80)
+    centers = distribute_centers_in_quadrilateral(quad, num_centers, rng)
+
+    for center in centers:
+        draw_center(tensor, center, rng.integers(0, 2))
+
     base_length = min(height, width) * rng.uniform(0.25, 0.40)
-    cut_angle = rng.uniform(-0.17, 0.17)
-    explosion_angle = cut_angle + np.pi / 2 + rng.uniform(-0.17, 0.17)
-
-    cut_line_length = base_length * rng.uniform(0.5, 0.8)
-    cut_num_centers = rng.integers(30, 60)
-    cut_centers = distribute_centers_along_line(origin, cut_angle, cut_line_length, cut_num_centers, rng, lateral_spread=5.0)
-
-    for center in cut_centers:
-        draw_center(tensor, center, rng.integers(0, 2))
-
-    cut_smoke_radius = base_length * rng.uniform(0.15, 0.3)
-    draw_smoke(tensor, cut_centers, cut_smoke_radius, rng)
-
-    explosion_line_length = base_length * rng.uniform(0.4, 0.7)
-    explosion_num_centers = rng.integers(30, 60)
-    explosion_centers = distribute_centers_along_line(origin, explosion_angle, explosion_line_length, explosion_num_centers, rng, lateral_spread=5.0)
-
-    for center in explosion_centers:
-        draw_center(tensor, center, rng.integers(0, 2))
-
-    explosion_smoke_radius = base_length * rng.uniform(0.2, 0.35)
-    draw_smoke(tensor, explosion_centers, explosion_smoke_radius, rng)
+    smoke_radius = base_length * rng.uniform(0.15, 0.3)
+    draw_smoke(tensor, centers, smoke_radius, rng)
 
     return tensor
 
