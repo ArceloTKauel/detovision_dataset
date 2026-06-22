@@ -259,18 +259,47 @@ def draw_trajectory(
                 tensor[py, px] = 255
 
 
+def measure_smoke_width(
+    tensor: np.ndarray,
+    origin: tuple[int, int],
+    angle: float,
+) -> float:
+    h, w = tensor.shape
+    oy, ox = origin
+    dist = 0.0
+    step = 1.0
+
+    while True:
+        dist += step
+        py = int(round(oy + dist * np.sin(angle)))
+        px = int(round(ox + dist * np.cos(angle)))
+
+        if py < 0 or py >= h or px < 0 or px >= w:
+            break
+        if tensor[py, px] == 0:
+            break
+
+    return dist
+
+
 def draw_trajectories(
     tensor: np.ndarray,
     centers: list[tuple[int, int]],
     origin: tuple[int, int],
-    max_length: float,
     num_trajectories: int,
     rng: np.random.Generator,
 ) -> None:
+    h, w = tensor.shape
+    diagonal = np.sqrt(h ** 2 + w ** 2)
+
     for _ in range(num_trajectories):
         center = centers[rng.integers(0, len(centers))]
         angle = rng.uniform(0, 2 * np.pi)
-        length = max_length * rng.uniform(0.3, 1.0)
+
+        smoke_width = measure_smoke_width(tensor, origin, angle)
+        min_length = max(10, smoke_width)
+        length = rng.uniform(min_length, diagonal)
+
         draw_trajectory(tensor, center, angle, length, origin, rng)
 
 
@@ -296,9 +325,8 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     smoke_radius = base_length * rng.uniform(0.15, 0.3)
     draw_smoke(tensor, centers, smoke_radius, rng)
 
-    trajectory_length = base_length * rng.uniform(0.8, 1.5)
-    num_trajectories = rng.integers(60, 150)
-    draw_trajectories(tensor, centers, origin, trajectory_length, num_trajectories, rng)
+    num_trajectories = rng.integers(1, 16)
+    draw_trajectories(tensor, centers, origin, num_trajectories, rng)
 
     tensor = np.where(tensor >= 128, 255, 0).astype(np.uint8)
 
