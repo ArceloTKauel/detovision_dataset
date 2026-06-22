@@ -32,77 +32,6 @@ def centroid_of_polygon(vertices: np.ndarray) -> tuple[int, int]:
     return cy, cx
 
 
-def bresenham(y0: int, x0: int, y1: int, x1: int) -> list[tuple[int, int]]:
-    points = []
-    dx = abs(x1 - x0)
-    dy = abs(y1 - y0)
-    sx = 1 if x0 < x1 else -1
-    sy = 1 if y0 < y1 else -1
-    err = dx - dy
-
-    while True:
-        points.append((y0, x0))
-        if y0 == y1 and x0 == x1:
-            break
-        e2 = 2 * err
-        if e2 > -dy:
-            err -= dy
-            x0 += sx
-        if e2 < dx:
-            err += dx
-            y0 += sy
-
-    return points
-
-
-def draw_trajectory(
-    tensor: np.ndarray,
-    center: tuple[int, int],
-    angle: float,
-    length: float,
-    rng: np.random.Generator,
-) -> None:
-    h, w = tensor.shape
-    cy, cx = center
-
-    end_y = int(round(cy + length * np.sin(angle)))
-    end_x = int(round(cx + length * np.cos(angle)))
-
-    end_y = np.clip(end_y, 0, h - 1)
-    end_x = np.clip(end_x, 0, w - 1)
-
-    points = bresenham(cy, cx, end_y, end_x)
-
-    for i, (py, px) in enumerate(points):
-        dist_from_center = np.sqrt((py - cy) ** 2 + (px - cx) ** 2)
-        max_dist = length if length > 0 else 1
-        ratio = dist_from_center / max_dist
-
-        gap_probability = ratio * 0.8
-
-        if rng.random() > gap_probability:
-            if 0 <= py < h and 0 <= px < w:
-                brightness = int(255 * (1 - ratio * 0.7))
-                tensor[py, px] = max(tensor[py, px], brightness)
-
-
-def draw_lobe(
-    tensor: np.ndarray,
-    center: tuple[int, int],
-    base_angle: float,
-    spread_deg: float,
-    max_length: float,
-    num_trajectories: int,
-    rng: np.random.Generator,
-) -> None:
-    spread_rad = np.radians(spread_deg)
-
-    for _ in range(num_trajectories):
-        angle = base_angle + rng.uniform(-spread_rad, spread_rad)
-        length = max_length * rng.uniform(0.3, 1.0)
-        draw_trajectory(tensor, center, angle, length, rng)
-
-
 def draw_center(
     tensor: np.ndarray,
     center: tuple[int, int],
@@ -158,25 +87,12 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     for center in cut_centers:
         draw_center(tensor, center, rng.integers(0, 2))
 
-        spread = rng.uniform(10, 20)
-        length = base_length * rng.uniform(0.4, 0.9)
-        num_traj = rng.integers(15, 35)
-
-        draw_lobe(tensor, center, cut_angle + rng.uniform(-0.1, 0.1), spread, length, num_traj, rng)
-        draw_lobe(tensor, center, cut_angle + np.pi + rng.uniform(-0.1, 0.1), spread, length * rng.uniform(0.5, 1.0), num_traj, rng)
-
     explosion_line_length = base_length * rng.uniform(0.3, 0.5)
     explosion_num_centers = rng.integers(5, 12)
     explosion_centers = distribute_centers_along_line(origin, explosion_angle, explosion_line_length, explosion_num_centers, rng)
 
     for center in explosion_centers:
         draw_center(tensor, center, rng.integers(0, 2))
-
-        spread = rng.uniform(15, 35)
-        length = base_length * rng.uniform(0.6, 1.3)
-        num_traj = rng.integers(20, 45)
-
-        draw_lobe(tensor, center, explosion_angle + rng.uniform(-0.15, 0.15), spread, length, num_traj, rng)
 
     return tensor
 
