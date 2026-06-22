@@ -76,10 +76,11 @@ def draw_smoke(
     all_cy = np.array([c[0] for c in centers], dtype=np.float64)
     all_cx = np.array([c[1] for c in centers], dtype=np.float64)
 
-    min_y = max(0, int(all_cy.min() - smoke_radius - 10))
-    max_y = min(h, int(all_cy.max() + smoke_radius + 10))
-    min_x = max(0, int(all_cx.min() - smoke_radius - 10))
-    max_x = min(w, int(all_cx.max() + smoke_radius + 10))
+    fringe_radius = smoke_radius * 1.3
+    min_y = max(0, int(all_cy.min() - fringe_radius - 10))
+    max_y = min(h, int(all_cy.max() + fringe_radius + 10))
+    min_x = max(0, int(all_cx.min() - fringe_radius - 10))
+    max_x = min(w, int(all_cx.max() + fringe_radius + 10))
 
     ys, xs = np.mgrid[min_y:max_y, min_x:max_x]
 
@@ -88,42 +89,40 @@ def draw_smoke(
         dist = np.sqrt((ys - cy) ** 2 + (xs - cx) ** 2)
         min_dist = np.minimum(min_dist, dist)
 
+    region = tensor[min_y:max_y, min_x:max_x]
+    noise = rng.random(ys.shape)
+
     core_radius = smoke_radius * 0.25
     core_mask = min_dist < core_radius
-    tensor[min_y:max_y, min_x:max_x][core_mask] = 255
+    region[core_mask] = 255
 
     mid_radius = smoke_radius * 0.5
     mid_mask = (min_dist >= core_radius) & (min_dist < mid_radius)
     ratio_mid = (min_dist[mid_mask] - core_radius) / (mid_radius - core_radius)
-    noise_mid = rng.random(np.count_nonzero(mid_mask))
     prob_mid = 0.9 - 0.4 * ratio_mid
-    region = tensor[min_y:max_y, min_x:max_x]
     brightness_mid = (255 * (1 - ratio_mid * 0.3)).astype(np.uint8)
     region[mid_mask] = np.where(
-        noise_mid < prob_mid,
+        noise[mid_mask] < prob_mid,
         np.maximum(region[mid_mask], brightness_mid),
         region[mid_mask],
     )
 
     outer_mask = (min_dist >= mid_radius) & (min_dist < smoke_radius)
     ratio_outer = (min_dist[outer_mask] - mid_radius) / (smoke_radius - mid_radius)
-    noise_outer = rng.random(np.count_nonzero(outer_mask))
     prob_outer = 0.6 * (1 - ratio_outer) ** 2
     brightness_outer = (200 * (1 - ratio_outer * 0.7)).astype(np.uint8)
     region[outer_mask] = np.where(
-        noise_outer < prob_outer,
+        noise[outer_mask] < prob_outer,
         np.maximum(region[outer_mask], brightness_outer),
         region[outer_mask],
     )
 
-    fringe_radius = smoke_radius * 1.3
     fringe_mask = (min_dist >= smoke_radius) & (min_dist < fringe_radius)
     ratio_fringe = (min_dist[fringe_mask] - smoke_radius) / (fringe_radius - smoke_radius)
-    noise_fringe = rng.random(np.count_nonzero(fringe_mask))
     prob_fringe = 0.15 * (1 - ratio_fringe) ** 3
     brightness_fringe = (120 * (1 - ratio_fringe)).astype(np.uint8)
     region[fringe_mask] = np.where(
-        noise_fringe < prob_fringe,
+        noise[fringe_mask] < prob_fringe,
         np.maximum(region[fringe_mask], brightness_fringe),
         region[fringe_mask],
     )
