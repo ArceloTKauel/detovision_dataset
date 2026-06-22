@@ -226,6 +226,8 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     smoke_radius = base_length * rng.uniform(0.15, 0.3)
     draw_smoke(tensor, centers, smoke_radius, rng)
 
+    tensor = np.where(tensor >= 128, 255, 0).astype(np.uint8)
+
     return tensor
 
 
