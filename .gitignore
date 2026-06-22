@@ -29,3 +29,6 @@ desktop.ini
 
 # Env
 .env
+
+# Docs internos
+SPEC.md
