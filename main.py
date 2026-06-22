@@ -5,6 +5,68 @@ HEIGHT = 720
 WIDTH = 1280
 
 
+def perlin_noise_2d(shape: tuple[int, int], scale: float, rng: np.random.Generator, octaves: int = 4) -> np.ndarray:
+    h, w = shape
+    noise = np.zeros((h, w))
+
+    for octave in range(octaves):
+        freq = 2 ** octave
+        amp = 0.5 ** octave
+        grid_h = max(2, int(h / (scale / freq)))
+        grid_w = max(2, int(w / (scale / freq)))
+
+        angles = rng.uniform(0, 2 * np.pi, (grid_h + 1, grid_w + 1))
+        gradients_y = np.sin(angles)
+        gradients_x = np.cos(angles)
+
+        ys = np.linspace(0, grid_h - 1, h, endpoint=False)
+        xs = np.linspace(0, grid_w - 1, w, endpoint=False)
+
+        y0 = ys.astype(int)
+        x0 = xs.astype(int)
+        y1 = y0 + 1
+        x1 = x0 + 1
+
+        fy = ys - y0
+        fx = xs - x0
+
+        fy_smooth = fy * fy * (3 - 2 * fy)
+        fx_smooth = fx * fx * (3 - 2 * fx)
+
+        fy_s = fy_smooth[:, np.newaxis]
+        fx_s = fx_smooth[np.newaxis, :]
+        fy_col = fy[:, np.newaxis]
+        fx_row = fx[np.newaxis, :]
+
+        y0_col = y0[:, np.newaxis]
+        x0_row = x0[np.newaxis, :]
+        y1_col = y1[:, np.newaxis]
+        x1_row = x1[np.newaxis, :]
+
+        d00_y = fy_col
+        d00_x = fx_row
+        d10_y = fy_col - 1
+        d10_x = fx_row
+        d01_y = fy_col
+        d01_x = fx_row - 1
+        d11_y = fy_col - 1
+        d11_x = fx_row - 1
+
+        g00 = gradients_y[y0_col, x0_row] * d00_y + gradients_x[y0_col, x0_row] * d00_x
+        g10 = gradients_y[y1_col, x0_row] * d10_y + gradients_x[y1_col, x0_row] * d10_x
+        g01 = gradients_y[y0_col, x1_row] * d01_y + gradients_x[y0_col, x1_row] * d01_x
+        g11 = gradients_y[y1_col, x1_row] * d11_y + gradients_x[y1_col, x1_row] * d11_x
+
+        lerp_x0 = g00 + fx_s * (g01 - g00)
+        lerp_x1 = g10 + fx_s * (g11 - g10)
+        value = lerp_x0 + fy_s * (lerp_x1 - lerp_x0)
+
+        noise += value * amp
+
+    noise = (noise - noise.min()) / (noise.max() - noise.min() + 1e-10)
+    return noise
+
+
 def create_canvas(height: int, width: int) -> np.ndarray:
     return np.zeros((height, width), dtype=np.uint8)
 
@@ -85,6 +147,11 @@ def draw_smoke(
     min_x = max(0, int(all_cx.min() - fringe_radius - 10))
     max_x = min(w, int(all_cx.max() + fringe_radius + 10))
 
+    region_h = max_y - min_y
+    region_w = max_x - min_x
+    if region_h <= 0 or region_w <= 0:
+        return
+
     ys, xs = np.mgrid[min_y:max_y, min_x:max_x]
 
     min_dist = np.full(ys.shape, np.inf)
@@ -93,39 +160,45 @@ def draw_smoke(
         min_dist = np.minimum(min_dist, dist)
 
     region = tensor[min_y:max_y, min_x:max_x]
-    noise = rng.random(ys.shape)
+
+    perlin = perlin_noise_2d((region_h, region_w), scale=smoke_radius * 0.4, rng=rng, octaves=5)
+    perlin_fine = perlin_noise_2d((region_h, region_w), scale=smoke_radius * 0.15, rng=rng, octaves=3)
+
+    radius_distortion = 1.0 + (perlin - 0.5) * 0.6
+    distorted_dist = min_dist / radius_distortion
 
     core_radius = smoke_radius * 0.25
-    core_mask = min_dist < core_radius
-    region[core_mask] = 255
+    core_mask = distorted_dist < core_radius
+    core_brightness = (255 * (0.85 + perlin_fine[core_mask] * 0.15)).clip(0, 255).astype(np.uint8)
+    region[core_mask] = np.maximum(region[core_mask], core_brightness)
 
     mid_radius = smoke_radius * 0.5
-    mid_mask = (min_dist >= core_radius) & (min_dist < mid_radius)
-    ratio_mid = (min_dist[mid_mask] - core_radius) / (mid_radius - core_radius)
+    mid_mask = (distorted_dist >= core_radius) & (distorted_dist < mid_radius)
+    ratio_mid = (distorted_dist[mid_mask] - core_radius) / (mid_radius - core_radius)
     prob_mid = 0.9 - 0.4 * ratio_mid
-    brightness_mid = (255 * (1 - ratio_mid * 0.3)).astype(np.uint8)
+    brightness_mid = (255 * (1 - ratio_mid * 0.3) * (0.7 + perlin[mid_mask] * 0.3)).clip(0, 255).astype(np.uint8)
     region[mid_mask] = np.where(
-        noise[mid_mask] < prob_mid,
+        perlin[mid_mask] > (1 - prob_mid),
         np.maximum(region[mid_mask], brightness_mid),
         region[mid_mask],
     )
 
-    outer_mask = (min_dist >= mid_radius) & (min_dist < smoke_radius)
-    ratio_outer = (min_dist[outer_mask] - mid_radius) / (smoke_radius - mid_radius)
+    outer_mask = (distorted_dist >= mid_radius) & (distorted_dist < smoke_radius)
+    ratio_outer = (distorted_dist[outer_mask] - mid_radius) / (smoke_radius - mid_radius)
     prob_outer = 0.6 * (1 - ratio_outer) ** 2
-    brightness_outer = (200 * (1 - ratio_outer * 0.7)).astype(np.uint8)
+    brightness_outer = (200 * (1 - ratio_outer * 0.7) * (0.6 + perlin[outer_mask] * 0.4)).clip(0, 255).astype(np.uint8)
     region[outer_mask] = np.where(
-        noise[outer_mask] < prob_outer,
+        perlin[outer_mask] > (1 - prob_outer),
         np.maximum(region[outer_mask], brightness_outer),
         region[outer_mask],
     )
 
-    fringe_mask = (min_dist >= smoke_radius) & (min_dist < fringe_radius)
-    ratio_fringe = (min_dist[fringe_mask] - smoke_radius) / (fringe_radius - smoke_radius)
+    fringe_mask = (distorted_dist >= smoke_radius) & (distorted_dist < fringe_radius)
+    ratio_fringe = (distorted_dist[fringe_mask] - smoke_radius) / (fringe_radius - smoke_radius)
     prob_fringe = 0.15 * (1 - ratio_fringe) ** 3
-    brightness_fringe = (120 * (1 - ratio_fringe)).astype(np.uint8)
+    brightness_fringe = (120 * (1 - ratio_fringe) * perlin[fringe_mask]).clip(0, 255).astype(np.uint8)
     region[fringe_mask] = np.where(
-        noise[fringe_mask] < prob_fringe,
+        perlin[fringe_mask] > (1 - prob_fringe),
         np.maximum(region[fringe_mask], brightness_fringe),
         region[fringe_mask],
     )
