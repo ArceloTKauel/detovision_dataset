@@ -314,7 +314,7 @@ def tensor_to_image(tensor: np.ndarray, path: str) -> None:
 def main():
     for i in range(1, 5):
         tensor = generate_explosion(HEIGHT, WIDTH)
-        path = f"explosion_{i}.jpg"
+        path = f"explosion_{i}.png"
         tensor_to_image(tensor, path)
 
 
