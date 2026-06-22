@@ -204,6 +204,76 @@ def draw_smoke(
     )
 
 
+def bresenham(y0: int, x0: int, y1: int, x1: int) -> list[tuple[int, int]]:
+    points = []
+    dx = abs(x1 - x0)
+    dy = abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    err = dx - dy
+
+    while True:
+        points.append((y0, x0))
+        if y0 == y1 and x0 == x1:
+            break
+        e2 = 2 * err
+        if e2 > -dy:
+            err -= dy
+            x0 += sx
+        if e2 < dx:
+            err += dx
+            y0 += sy
+
+    return points
+
+
+def draw_trajectory(
+    tensor: np.ndarray,
+    center: tuple[int, int],
+    angle: float,
+    length: float,
+    origin: tuple[int, int],
+    rng: np.random.Generator,
+) -> None:
+    h, w = tensor.shape
+    cy, cx = center
+    oy, ox = origin
+
+    end_y = int(round(cy + length * np.sin(angle)))
+    end_x = int(round(cx + length * np.cos(angle)))
+
+    end_y = np.clip(end_y, 0, h - 1)
+    end_x = np.clip(end_x, 0, w - 1)
+
+    points = bresenham(cy, cx, end_y, end_x)
+
+    for py, px in points:
+        dist_from_origin = np.sqrt((py - oy) ** 2 + (px - ox) ** 2)
+        max_dist = length if length > 0 else 1
+        ratio = min(dist_from_origin / max_dist, 1.0)
+
+        gap_probability = ratio * 0.85
+
+        if rng.random() > gap_probability:
+            if 0 <= py < h and 0 <= px < w:
+                tensor[py, px] = 255
+
+
+def draw_trajectories(
+    tensor: np.ndarray,
+    centers: list[tuple[int, int]],
+    origin: tuple[int, int],
+    max_length: float,
+    num_trajectories: int,
+    rng: np.random.Generator,
+) -> None:
+    for _ in range(num_trajectories):
+        center = centers[rng.integers(0, len(centers))]
+        angle = rng.uniform(0, 2 * np.pi)
+        length = max_length * rng.uniform(0.3, 1.0)
+        draw_trajectory(tensor, center, angle, length, origin, rng)
+
+
 def generate_explosion(height: int, width: int, rng: np.random.Generator | None = None) -> np.ndarray:
     if rng is None:
         rng = np.random.default_rng()
@@ -225,6 +295,10 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     base_length = min(height, width) * rng.uniform(0.25, 0.40)
     smoke_radius = base_length * rng.uniform(0.15, 0.3)
     draw_smoke(tensor, centers, smoke_radius, rng)
+
+    trajectory_length = base_length * rng.uniform(0.8, 1.5)
+    num_trajectories = rng.integers(60, 150)
+    draw_trajectories(tensor, centers, origin, trajectory_length, num_trajectories, rng)
 
     tensor = np.where(tensor >= 128, 255, 0).astype(np.uint8)
 
