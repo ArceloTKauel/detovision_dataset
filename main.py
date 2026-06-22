@@ -9,192 +9,127 @@ def create_canvas(height: int, width: int) -> np.ndarray:
     return np.zeros((height, width), dtype=np.uint8)
 
 
-def random_center(height: int, width: int, rng: np.random.Generator, margin: float = 0.15) -> tuple[int, int]:
-    cy = rng.integers(int(height * margin), int(height * (1 - margin)))
+def generate_quadrilateral(
+    height: int, width: int, rng: np.random.Generator, margin: float = 0.15
+) -> np.ndarray:
     cx = rng.integers(int(width * margin), int(width * (1 - margin)))
-    return int(cy), int(cx)
+    cy = rng.integers(int(height * margin), int(height * (1 - margin)))
+
+    angles = np.sort(rng.uniform(0, 2 * np.pi, size=4))
+    radii = rng.uniform(20, 60, size=4)
+
+    vertices = np.zeros((4, 2), dtype=np.float64)
+    for i in range(4):
+        vertices[i, 0] = cy + radii[i] * np.sin(angles[i])
+        vertices[i, 1] = cx + radii[i] * np.cos(angles[i])
+
+    return vertices
 
 
-def perturbed_radius(base_radius: float, theta: np.ndarray, rng: np.random.Generator, octaves: int = 5) -> np.ndarray:
-    result = np.ones_like(theta) * base_radius
-    for i in range(octaves):
-        freq = 2 ** i
-        amp = base_radius * 0.3 / (i + 1)
-        phase = rng.uniform(0, 2 * np.pi)
-        result += amp * np.sin(freq * theta + phase)
-    return result
+def centroid_of_polygon(vertices: np.ndarray) -> tuple[int, int]:
+    cy = int(round(np.mean(vertices[:, 0])))
+    cx = int(round(np.mean(vertices[:, 1])))
+    return cy, cx
 
 
-def draw_nucleus(
+def bresenham(y0: int, x0: int, y1: int, x1: int) -> list[tuple[int, int]]:
+    points = []
+    dx = abs(x1 - x0)
+    dy = abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    err = dx - dy
+
+    while True:
+        points.append((y0, x0))
+        if y0 == y1 and x0 == x1:
+            break
+        e2 = 2 * err
+        if e2 > -dy:
+            err -= dy
+            x0 += sx
+        if e2 < dx:
+            err += dx
+            y0 += sy
+
+    return points
+
+
+def draw_trajectory(
     tensor: np.ndarray,
     center: tuple[int, int],
-    angle_rad: float,
-    spread_rad: float,
-    base_radius: float,
-    rng: np.random.Generator,
-    is_explosion: bool = False,
-) -> None:
-    h, w = tensor.shape
-    cy, cx = center
-
-    ys, xs = np.mgrid[0:h, 0:w]
-    dy = (ys - cy).astype(np.float64)
-    dx = (xs - cx).astype(np.float64)
-    r = np.sqrt(dy**2 + dx**2)
-    theta = np.arctan2(dy, dx)
-
-    angle_diff = np.abs(np.arctan2(np.sin(theta - angle_rad), np.cos(theta - angle_rad)))
-
-    noise_boundary = perturbed_radius(spread_rad, theta, rng, octaves=4)
-    in_lobe = angle_diff < noise_boundary
-
-    p_radius = perturbed_radius(base_radius, theta, rng, octaves=6)
-
-    core_r = p_radius * 0.5
-    core_mask = in_lobe & (r < core_r)
-    noise = rng.random(tensor.shape)
-    tensor[core_mask & (noise > 0.05)] = 255
-
-    holes = rng.random(tensor.shape)
-    tensor[core_mask & (holes < 0.08)] = 0
-
-    mid_mask = in_lobe & (r >= core_r) & (r < p_radius * 0.8)
-    mid_prob = np.where(mid_mask, 0.85 - 0.4 * (r / p_radius), 0.0)
-    tensor[mid_mask & (noise < mid_prob)] = 255
-
-    outer_mask = in_lobe & (r >= p_radius * 0.8) & (r < p_radius)
-    outer_prob = np.where(outer_mask, 0.5 * (1 - r / p_radius) ** 2, 0.0)
-    tensor[outer_mask & (noise < outer_prob)] = 255
-
-    if is_explosion:
-        extra_spread = spread_rad * 1.3
-        extra_in = angle_diff < extra_spread
-        extra_mask = extra_in & (r >= p_radius * 0.3) & (r < p_radius * 1.1)
-        extra_prob = np.where(extra_mask, 0.15 * (1 - r / (p_radius * 1.1)), 0.0)
-        tensor[extra_mask & (noise < extra_prob)] = rng.integers(
-            180, 255, size=np.count_nonzero(extra_mask & (noise < extra_prob))
-        ).astype(np.uint8)
-
-
-def draw_filaments(
-    tensor: np.ndarray,
-    center: tuple[int, int],
-    angle_rad: float,
-    spread_rad: float,
-    max_length: float,
-    rng: np.random.Generator,
-    num_filaments: int | None = None,
-) -> None:
-    h, w = tensor.shape
-    cy, cx = center
-
-    if num_filaments is None:
-        num_filaments = rng.integers(25, 55)
-
-    for _ in range(num_filaments):
-        fil_angle = angle_rad + rng.uniform(-spread_rad * 0.95, spread_rad * 0.95)
-        fil_length = max_length * rng.uniform(0.4, 1.0)
-        fil_width_base = rng.uniform(1.0, 3.0)
-        curvature = rng.uniform(-0.003, 0.003)
-
-        num_points = int(fil_length * 1.5)
-        if num_points < 2:
-            continue
-
-        t = np.linspace(0, fil_length, num_points)
-        current_angle = fil_angle
-        wobble_freq = rng.uniform(0.01, 0.05)
-        wobble_amp = rng.uniform(1.0, 4.0)
-
-        positions_x = np.zeros(num_points)
-        positions_y = np.zeros(num_points)
-        positions_x[0] = cx
-        positions_y[0] = cy
-
-        for i in range(1, num_points):
-            dt = t[i] - t[i - 1]
-            current_angle += curvature * dt
-            wobble = wobble_amp * np.sin(wobble_freq * t[i])
-            positions_x[i] = positions_x[i - 1] + dt * np.cos(current_angle) + wobble * np.cos(current_angle + np.pi / 2) * 0.3
-            positions_y[i] = positions_y[i - 1] + dt * np.sin(current_angle) + wobble * np.sin(current_angle + np.pi / 2) * 0.3
-
-        for i in range(num_points):
-            progress = t[i] / fil_length
-            px = int(round(positions_x[i]))
-            py = int(round(positions_y[i]))
-            brightness = int(255 * (1 - progress * 0.85) ** 1.5)
-            brightness = max(40, brightness)
-            r_width = max(0, int(fil_width_base * (1 - progress * 0.8)))
-
-            if rng.random() < (1 - progress * 0.6):
-                for ddy in range(-r_width, r_width + 1):
-                    for ddx in range(-r_width, r_width + 1):
-                        ny, nx = py + ddy, px + ddx
-                        if 0 <= ny < h and 0 <= nx < w:
-                            if rng.random() < 0.8:
-                                tensor[ny, nx] = max(tensor[ny, nx], brightness)
-
-
-def draw_shockwave_arcs(
-    tensor: np.ndarray,
-    center: tuple[int, int],
-    base_radius: float,
+    angle: float,
+    length: float,
     rng: np.random.Generator,
 ) -> None:
     h, w = tensor.shape
     cy, cx = center
 
-    num_arcs = rng.integers(2, 5)
-    for _ in range(num_arcs):
-        arc_radius = base_radius * rng.uniform(0.8, 2.5)
-        arc_start = rng.uniform(0, 2 * np.pi)
-        arc_span = rng.uniform(np.pi * 0.3, np.pi * 1.2)
-        thickness = rng.uniform(0.5, 1.5)
+    end_y = int(round(cy + length * np.sin(angle)))
+    end_x = int(round(cx + length * np.cos(angle)))
 
-        num_points = int(arc_span * arc_radius * 0.5)
-        if num_points < 2:
-            continue
+    end_y = np.clip(end_y, 0, h - 1)
+    end_x = np.clip(end_x, 0, w - 1)
 
-        angles = np.linspace(arc_start, arc_start + arc_span, num_points)
-        for angle in angles:
-            r_offset = rng.normal(0, 1.0)
-            px = int(round(cx + (arc_radius + r_offset) * np.cos(angle)))
-            py = int(round(cy + (arc_radius + r_offset) * np.sin(angle)))
+    points = bresenham(cy, cx, end_y, end_x)
 
+    for i, (py, px) in enumerate(points):
+        dist_from_center = np.sqrt((py - cy) ** 2 + (px - cx) ** 2)
+        max_dist = length if length > 0 else 1
+        ratio = dist_from_center / max_dist
+
+        gap_probability = ratio * 0.8
+
+        if rng.random() > gap_probability:
             if 0 <= py < h and 0 <= px < w:
-                if rng.random() < 0.6:
-                    brightness = rng.integers(30, 100)
-                    for ddy in range(int(-thickness), int(thickness) + 1):
-                        for ddx in range(int(-thickness), int(thickness) + 1):
-                            ny, nx = py + ddy, px + ddx
-                            if 0 <= ny < h and 0 <= nx < w:
-                                tensor[ny, nx] = max(tensor[ny, nx], brightness)
+                brightness = int(255 * (1 - ratio * 0.7))
+                tensor[py, px] = max(tensor[py, px], brightness)
 
 
-def draw_debris(
+def draw_lobe(
     tensor: np.ndarray,
     center: tuple[int, int],
-    max_radius: float,
+    base_angle: float,
+    spread_deg: float,
+    max_length: float,
+    num_trajectories: int,
     rng: np.random.Generator,
+) -> None:
+    spread_rad = np.radians(spread_deg)
+
+    for _ in range(num_trajectories):
+        angle = base_angle + rng.uniform(-spread_rad, spread_rad)
+        length = max_length * rng.uniform(0.3, 1.0)
+        draw_trajectory(tensor, center, angle, length, rng)
+
+
+def draw_center(
+    tensor: np.ndarray,
+    center: tuple[int, int],
+    size: int,
 ) -> None:
     h, w = tensor.shape
     cy, cx = center
+    for dy in range(-size, size + 1):
+        for dx in range(-size, size + 1):
+            ny, nx = cy + dy, cx + dx
+            if 0 <= ny < h and 0 <= nx < w:
+                tensor[ny, nx] = 255
 
-    num_particles = rng.integers(200, 600)
-    for _ in range(num_particles):
-        angle = rng.uniform(0, 2 * np.pi)
-        dist = max_radius * rng.uniform(0.2, 2.0)
-        px = int(round(cx + dist * np.cos(angle)))
-        py = int(round(cy + dist * np.sin(angle)))
 
-        if 0 <= py < h and 0 <= px < w:
-            brightness = rng.integers(40, 200)
-            size = rng.integers(0, 2)
-            for ddy in range(-size, size + 1):
-                for ddx in range(-size, size + 1):
-                    ny, nx = py + ddy, px + ddx
-                    if 0 <= ny < h and 0 <= nx < w:
-                        tensor[ny, nx] = max(tensor[ny, nx], brightness)
+def random_point_in_quadrilateral(vertices: np.ndarray, rng: np.random.Generator) -> tuple[int, int]:
+    v0, v1, v2, v3 = vertices
+    if rng.random() < 0.5:
+        tri = [v0, v1, v2]
+    else:
+        tri = [v0, v2, v3]
+    r1 = rng.random()
+    r2 = rng.random()
+    if r1 + r2 > 1:
+        r1 = 1 - r1
+        r2 = 1 - r2
+    point = tri[0] + r1 * (tri[1] - tri[0]) + r2 * (tri[2] - tri[0])
+    return int(round(point[0])), int(round(point[1]))
 
 
 def generate_explosion(height: int, width: int, rng: np.random.Generator | None = None) -> np.ndarray:
@@ -202,33 +137,32 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
         rng = np.random.default_rng()
 
     tensor = create_canvas(height, width)
-    center = random_center(height, width, rng)
+
+    quad = generate_quadrilateral(height, width, rng)
+    num_centers = rng.integers(2, 5)
 
     base_length = min(height, width) * rng.uniform(0.25, 0.40)
+    cut_angle = rng.uniform(-0.17, 0.17)
 
-    cut_angle_deg = rng.uniform(-10, 10)
-    cut_angle = np.radians(cut_angle_deg)
-    cut_length = base_length * rng.uniform(0.7, 1.0)
-    cut_spread = np.radians(rng.uniform(15, 25))
-    nucleus_radius = cut_length * 0.4
+    for _ in range(num_centers):
+        center = random_point_in_quadrilateral(quad, rng)
 
-    draw_nucleus(tensor, center, cut_angle, cut_spread, nucleus_radius, rng)
-    draw_nucleus(tensor, center, cut_angle + np.pi, cut_spread * rng.uniform(0.7, 1.0), nucleus_radius * rng.uniform(0.6, 0.9), rng)
+        center_size = rng.integers(1, 3)
+        draw_center(tensor, center, center_size)
 
-    draw_filaments(tensor, center, cut_angle, cut_spread * 1.1, cut_length, rng)
-    draw_filaments(tensor, center, cut_angle + np.pi, cut_spread * 1.1, cut_length * rng.uniform(0.6, 0.9), rng)
+        cut_spread = rng.uniform(15, 25)
+        cut_length = base_length * rng.uniform(0.5, 1.0)
+        cut_trajectories = rng.integers(30, 70)
 
-    explosion_angle_deg = cut_angle_deg + 90 + rng.uniform(-10, 10)
-    explosion_angle = np.radians(explosion_angle_deg)
-    explosion_length = base_length * rng.uniform(1.0, 1.5)
-    explosion_spread = np.radians(rng.uniform(25, 45))
-    explosion_nucleus_radius = explosion_length * 0.35
+        draw_lobe(tensor, center, cut_angle + rng.uniform(-0.1, 0.1), cut_spread, cut_length, cut_trajectories, rng)
+        draw_lobe(tensor, center, cut_angle + np.pi + rng.uniform(-0.1, 0.1), cut_spread, cut_length * rng.uniform(0.5, 1.0), cut_trajectories, rng)
 
-    draw_nucleus(tensor, center, explosion_angle, explosion_spread, explosion_nucleus_radius, rng, is_explosion=True)
-    draw_filaments(tensor, center, explosion_angle, explosion_spread * 1.2, explosion_length, rng, num_filaments=rng.integers(30, 60))
+        explosion_angle = cut_angle + np.pi / 2 + rng.uniform(-0.17, 0.17)
+        explosion_spread = rng.uniform(20, 40)
+        explosion_length = base_length * rng.uniform(0.8, 1.4)
+        explosion_trajectories = rng.integers(40, 100)
 
-    draw_shockwave_arcs(tensor, center, base_length * 0.6, rng)
-    draw_debris(tensor, center, base_length, rng)
+        draw_lobe(tensor, center, explosion_angle, explosion_spread, explosion_length, explosion_trajectories, rng)
 
     return tensor
 
