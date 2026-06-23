@@ -56,6 +56,7 @@ def draw_trajectory(
     length: float,
     origin: tuple[int, int],
     rng: np.random.Generator,
+    mask: np.ndarray | None = None,
 ) -> None:
     """
     Dibuja una trayectoria recta punteada desde center en la dirección angle.
@@ -74,6 +75,12 @@ def draw_trajectory(
     end_x = np.clip(end_x, 0, w - 1)
 
     points = bresenham(cy, cx, end_y, end_x)
+
+    # Mask: dibujar trayectoria completa (todos los píxeles, sin spacing)
+    if mask is not None:
+        for py, px in points:
+            if 0 <= py < h and 0 <= px < w:
+                mask[py, px] = 2
 
     pixels_since_draw = 0
     next_draw_at = 0
@@ -115,6 +122,7 @@ def draw_parabolic_trajectory(
     curvature: float,
     origin: tuple[int, int],
     rng: np.random.Generator,
+    mask: np.ndarray | None = None,
 ) -> None:
     """
     Dibuja una trayectoria parabólica punteada.
@@ -156,6 +164,10 @@ def draw_parabolic_trajectory(
             segment = [(py, px)]
 
         for sy, sx in segment:
+            # Mask: dibujar trayectoria completa (sin spacing)
+            if mask is not None and 0 <= sy < h and 0 <= sx < w:
+                mask[sy, sx] = 2
+
             if burst_remaining > 0:
                 if rng.random() < 0.7:
                     if 0 <= sy < h and 0 <= sx < w:
@@ -187,6 +199,7 @@ def draw_straight_trajectories(
     origin: tuple[int, int],
     num_trajectories: int,
     rng: np.random.Generator,
+    mask: np.ndarray | None = None,
 ) -> None:
     """Genera múltiples trayectorias rectas desde centros aleatorios."""
     h, w = tensor.shape
@@ -202,7 +215,7 @@ def draw_straight_trajectories(
         min_length = max(10, smoke_width)
         length = rng.uniform(min_length, diagonal)
 
-        draw_trajectory(tensor, center, angle, length, origin, rng)
+        draw_trajectory(tensor, center, angle, length, origin, rng, mask)
 
 
 def draw_parabolic_trajectories(
@@ -212,6 +225,7 @@ def draw_parabolic_trajectories(
     num_trajectories: int,
     drone_angle: float,
     rng: np.random.Generator,
+    mask: np.ndarray | None = None,
 ) -> None:
     """
     Genera múltiples trayectorias parabólicas. La curvatura se modula por
@@ -239,7 +253,7 @@ def draw_parabolic_trajectories(
         curvature_factor = abs(np.sin(angle_diff))
         curvature *= curvature_factor
 
-        draw_parabolic_trajectory(tensor, center, angle, length, curvature, origin, rng)
+        draw_parabolic_trajectory(tensor, center, angle, length, curvature, origin, rng, mask)
 
 
 def draw_trajectories(
@@ -250,7 +264,8 @@ def draw_trajectories(
     num_parabolic: int,
     drone_angle: float,
     rng: np.random.Generator,
+    mask: np.ndarray | None = None,
 ) -> None:
     """Punto de entrada: dibuja trayectorias rectas y parabólicas."""
-    draw_straight_trajectories(tensor, centers, origin, num_straight, rng)
-    draw_parabolic_trajectories(tensor, centers, origin, num_parabolic, drone_angle, rng)
+    draw_straight_trajectories(tensor, centers, origin, num_straight, rng, mask)
+    draw_parabolic_trajectories(tensor, centers, origin, num_parabolic, drone_angle, rng, mask)

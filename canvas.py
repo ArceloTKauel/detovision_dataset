@@ -53,6 +53,7 @@ def draw_center(
     tensor: np.ndarray,
     center: tuple[int, int],
     size: int,
+    mask: np.ndarray | None = None,
 ) -> None:
     """Dibuja un cuadrado blanco de lado (2*size+1) píxeles."""
     h, w = tensor.shape
@@ -62,6 +63,9 @@ def draw_center(
             ny, nx = cy + dy, cx + dx
             if 0 <= ny < h and 0 <= nx < w:
                 tensor[ny, nx] = 255
+                # Los centros son parte del humo en la máscara (clase 1)
+                if mask is not None:
+                    mask[ny, nx] = 1
 
 
 def distribute_centers_in_quadrilateral(

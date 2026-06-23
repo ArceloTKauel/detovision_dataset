@@ -26,6 +26,7 @@ def draw_smoke(
     centers: list[tuple[int, int]],
     smoke_radius: float,
     rng: np.random.Generator,
+    mask: np.ndarray | None = None,
 ) -> None:
     h, w = tensor.shape
 
@@ -54,6 +55,7 @@ def draw_smoke(
         min_dist = np.minimum(min_dist, dist)
 
     region = tensor[min_y:max_y, min_x:max_x]
+    mask_region = mask[min_y:max_y, min_x:max_x] if mask is not None else None
 
     # Perlin noise para distorsionar los bordes del humo y variar el brillo
     perlin = perlin_noise_2d((region_h, region_w), scale=smoke_radius * 0.4, rng=rng, octaves=5)
@@ -69,6 +71,8 @@ def draw_smoke(
     core_mask = distorted_dist < core_radius
     core_brightness = (255 * (0.85 + perlin_fine[core_mask] * 0.15)).clip(0, 255).astype(np.uint8)
     region[core_mask] = np.maximum(region[core_mask], core_brightness)
+    if mask_region is not None:
+        mask_region[core_mask] = 1
 
     # === ZONA MID (25% a 50% del radio) ===
     # Densidad decreciente, probabilidad de dibujar baja con la distancia
@@ -77,11 +81,15 @@ def draw_smoke(
     ratio_mid = (distorted_dist[mid_mask] - core_radius) / (mid_radius - core_radius)
     prob_mid = 0.9 - 0.4 * ratio_mid  # probabilidad de 90% a 50%
     brightness_mid = (255 * (1 - ratio_mid * 0.3) * (0.7 + perlin[mid_mask] * 0.3)).clip(0, 255).astype(np.uint8)
+    mid_drawn = perlin[mid_mask] > (1 - prob_mid)
     region[mid_mask] = np.where(
-        perlin[mid_mask] > (1 - prob_mid),
+        mid_drawn,
         np.maximum(region[mid_mask], brightness_mid),
         region[mid_mask],
     )
+    if mask_region is not None:
+        mid_indices = np.argwhere(mid_mask)
+        mask_region[mid_indices[mid_drawn, 0], mid_indices[mid_drawn, 1]] = 1
 
     # === ZONA OUTER (50% a 100% del radio) ===
     # Humo disperso, probabilidad decae cuadráticamente
@@ -89,11 +97,15 @@ def draw_smoke(
     ratio_outer = (distorted_dist[outer_mask] - mid_radius) / (smoke_radius - mid_radius)
     prob_outer = 0.6 * (1 - ratio_outer) ** 2
     brightness_outer = (200 * (1 - ratio_outer * 0.7) * (0.6 + perlin[outer_mask] * 0.4)).clip(0, 255).astype(np.uint8)
+    outer_drawn = perlin[outer_mask] > (1 - prob_outer)
     region[outer_mask] = np.where(
-        perlin[outer_mask] > (1 - prob_outer),
+        outer_drawn,
         np.maximum(region[outer_mask], brightness_outer),
         region[outer_mask],
     )
+    if mask_region is not None:
+        outer_indices = np.argwhere(outer_mask)
+        mask_region[outer_indices[outer_drawn, 0], outer_indices[outer_drawn, 1]] = 1
 
     # === ZONA FRINGE (100% a 130% del radio) ===
     # Borde difuso, muy baja probabilidad, partículas sueltas
@@ -101,11 +113,15 @@ def draw_smoke(
     ratio_fringe = (distorted_dist[fringe_mask] - smoke_radius) / (fringe_radius - smoke_radius)
     prob_fringe = 0.15 * (1 - ratio_fringe) ** 3
     brightness_fringe = (120 * (1 - ratio_fringe) * perlin[fringe_mask]).clip(0, 255).astype(np.uint8)
+    fringe_drawn = perlin[fringe_mask] > (1 - prob_fringe)
     region[fringe_mask] = np.where(
-        perlin[fringe_mask] > (1 - prob_fringe),
+        fringe_drawn,
         np.maximum(region[fringe_mask], brightness_fringe),
         region[fringe_mask],
     )
+    if mask_region is not None:
+        fringe_indices = np.argwhere(fringe_mask)
+        mask_region[fringe_indices[fringe_drawn, 0], fringe_indices[fringe_drawn, 1]] = 1
 
     # === MANCHAS SUSTRACTIVAS (polígonos que recortan huecos en el humo) ===
     # Se generan en zonas donde el Perlin sustractivo es bajo (< 0.45),
@@ -150,6 +166,8 @@ def draw_smoke(
         # Aplicar máscara: donde hay polígono, borrar el humo
         poly_array = np.array(poly_img)
         region[poly_array > 0] = 0
+        if mask_region is not None:
+            mask_region[poly_array > 0] = 0
 
 
 def measure_smoke_width(
