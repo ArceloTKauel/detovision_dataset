@@ -77,20 +77,30 @@ def draw_trajectory(
 
     pixels_since_draw = 0
     next_draw_at = 0
-    max_spacing = 50  # separación máxima entre puntos (al final de la trayectoria)
+    burst_remaining = 0
+    max_spacing = 50
 
     for py, px in points:
+        # Ráfaga activa: cada píxel de la ráfaga tiene 70% de probabilidad de dibujarse
+        if burst_remaining > 0:
+            if rng.random() < 0.7:
+                if 0 <= py < h and 0 <= px < w:
+                    tensor[py, px] = 255
+            burst_remaining -= 1
+            continue
+
         if pixels_since_draw >= next_draw_at:
             if 0 <= py < h and 0 <= px < w:
                 tensor[py, px] = 255
 
+            # Iniciar ráfaga de 1-5 píxeles consecutivos
+            burst_remaining = rng.integers(1, 6) - 1
+
             # Spacing cuadrático: ratio² * max_spacing
-            # ratio=0 (origen) → spacing=0 (denso), ratio=1 (final) → spacing=max
             dist_from_origin = np.sqrt((py - oy) ** 2 + (px - ox) ** 2)
             max_dist = length if length > 0 else 1
             ratio = min(dist_from_origin / max_dist, 1.0)
             spacing = ratio ** 2 * max_spacing
-            # Jitter aleatorio ±30% para evitar patrones regulares
             next_draw_at = max(1, int(spacing + rng.uniform(-spacing * 0.3, spacing * 0.3)))
             pixels_since_draw = 0
         else:
@@ -130,28 +140,35 @@ def draw_parabolic_trajectory(
     prev_py, prev_px = cy, cx
     pixels_since_draw = 0
     next_draw_at = 0
+    burst_remaining = 0
     max_spacing = 50
 
     for i in range(num_steps):
-        # Avance lineal a lo largo del ángulo + offset cuadrático perpendicular
         t = i / num_steps * length
         offset = curvature * t * t
 
         py = int(round(cy + t * sin_a + offset * sin_p))
         px = int(round(cx + t * cos_a + offset * cos_p))
 
-        # Si el salto es > 1 píxel, interpolar con Bresenham para no dejar huecos
         if i > 0 and (abs(py - prev_py) > 1 or abs(px - prev_px) > 1):
             segment = bresenham(prev_py, prev_px, py, px)
         else:
             segment = [(py, px)]
 
         for sy, sx in segment:
+            if burst_remaining > 0:
+                if rng.random() < 0.7:
+                    if 0 <= sy < h and 0 <= sx < w:
+                        tensor[sy, sx] = 255
+                burst_remaining -= 1
+                continue
+
             if pixels_since_draw >= next_draw_at:
                 if 0 <= sy < h and 0 <= sx < w:
                     tensor[sy, sx] = 255
 
-                # Mismo spacing cuadrático que en trayectorias rectas
+                burst_remaining = rng.integers(1, 6) - 1
+
                 dist_from_origin = np.sqrt((sy - oy) ** 2 + (sx - ox) ** 2)
                 max_dist = length if length > 0 else 1
                 ratio = min(dist_from_origin / max_dist, 1.0)
