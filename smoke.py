@@ -1,6 +1,6 @@
 import numpy as np
 
-from noise import perlin_noise_2d
+from perlin_noise import perlin_noise_2d
 
 
 def draw_smoke(
