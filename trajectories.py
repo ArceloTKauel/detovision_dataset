@@ -84,10 +84,10 @@ def draw_trajectory(
 
     points = bresenham(cy, cx, end_y, end_x)
 
-    # Mask: dibujar trayectoria completa (todos los píxeles, sin spacing)
+    # Mask: dibujar trayectoria completa (sin spacing), solo sobre fondo
     if mask is not None:
         for py, px in points:
-            if 0 <= py < h and 0 <= px < w:
+            if 0 <= py < h and 0 <= px < w and mask[py, px] == 0:
                 mask[py, px] = 2
 
     pixels_since_draw = 0
@@ -172,8 +172,8 @@ def draw_parabolic_trajectory(
             segment = [(py, px)]
 
         for sy, sx in segment:
-            # Mask: dibujar trayectoria completa (sin spacing)
-            if mask is not None and 0 <= sy < h and 0 <= sx < w:
+            # Mask: dibujar trayectoria completa, solo sobre fondo
+            if mask is not None and 0 <= sy < h and 0 <= sx < w and mask[sy, sx] == 0:
                 mask[sy, sx] = 2
 
             if burst_remaining > 0:
