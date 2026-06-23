@@ -135,6 +135,7 @@ def draw_parabolic_trajectories(
     centers: list[tuple[int, int]],
     origin: tuple[int, int],
     num_trajectories: int,
+    drone_angle: float,
     rng: np.random.Generator,
 ) -> None:
     h, w = tensor.shape
@@ -152,6 +153,10 @@ def draw_parabolic_trajectories(
         if abs(curvature) < 0.001:
             curvature = 0.001 * (1 if rng.random() > 0.5 else -1)
 
+        angle_diff = angle - drone_angle
+        curvature_factor = abs(np.sin(angle_diff))
+        curvature *= curvature_factor
+
         draw_parabolic_trajectory(tensor, center, angle, length, curvature, origin, rng)
 
 
@@ -161,7 +166,8 @@ def draw_trajectories(
     origin: tuple[int, int],
     num_straight: int,
     num_parabolic: int,
+    drone_angle: float,
     rng: np.random.Generator,
 ) -> None:
     draw_straight_trajectories(tensor, centers, origin, num_straight, rng)
-    draw_parabolic_trajectories(tensor, centers, origin, num_parabolic, rng)
+    draw_parabolic_trajectories(tensor, centers, origin, num_parabolic, drone_angle, rng)
