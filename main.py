@@ -74,6 +74,10 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     # Binarización: valores >= 128 pasan a blanco (255), el resto a negro (0)
     tensor = np.where(tensor >= 128, 255, 0).astype(np.uint8)
 
+    # Sincronizar mask: píxeles de humo que no sobrevivieron la binarización
+    # vuelven a fondo. Las trayectorias (clase 2) no se tocan.
+    mask[(tensor == 0) & (mask == 1)] = 0
+
     return tensor, mask
 
 
