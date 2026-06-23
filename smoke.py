@@ -1,4 +1,5 @@
 import numpy as np
+from PIL import Image, ImageDraw
 
 from perlin_noise import perlin_noise_2d
 
@@ -80,11 +81,38 @@ def draw_smoke(
         (region_h, region_w), scale=smoke_radius * 0.3, rng=rng, octaves=3
     )
     smoke_mask = region > 0
-    erase_threshold = 0.45
-    erase = (subtractive < erase_threshold) & smoke_mask
-    protection = np.clip(1.0 - distorted_dist / (core_radius * 1.5), 0, 1)
-    erase = erase & (rng.random(region.shape) > protection)
-    region[erase] = 0
+    candidate_mask = (subtractive < 0.45) & smoke_mask
+    candidate_mask &= distorted_dist > core_radius * 0.5
+
+    candidate_coords = np.argwhere(candidate_mask)
+    if len(candidate_coords) > 0:
+        num_polys = min(len(candidate_coords), rng.integers(8, 25))
+        seed_indices = rng.choice(len(candidate_coords), size=num_polys, replace=False)
+        seeds = candidate_coords[seed_indices]
+
+        poly_img = Image.new("L", (region_w, region_h), 0)
+        draw = ImageDraw.Draw(poly_img)
+
+        for seed in seeds:
+            sy, sx = seed
+            dist = distorted_dist[sy, sx]
+            core_factor = float(np.clip(dist / (core_radius * 2), 0.2, 1.0))
+
+            num_verts = rng.integers(4, 8)
+            angles = np.sort(rng.uniform(0, 2 * np.pi, size=num_verts))
+            base_r = smoke_radius * rng.uniform(0.1, 0.3) * core_factor
+
+            verts = []
+            for a in angles:
+                r = base_r * rng.uniform(0.6, 1.0)
+                vy = sy + r * np.sin(a)
+                vx = sx + r * np.cos(a)
+                verts.append((int(round(vx)), int(round(vy))))
+
+            draw.polygon(verts, fill=255)
+
+        poly_array = np.array(poly_img)
+        region[poly_array > 0] = 0
 
 
 def measure_smoke_width(
