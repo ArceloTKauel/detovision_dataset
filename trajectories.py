@@ -46,16 +46,21 @@ def draw_trajectory(
 
     points = bresenham(cy, cx, end_y, end_x)
 
+    pixels_since_draw = 0
+    next_draw_at = 0
+
     for py, px in points:
-        dist_from_origin = np.sqrt((py - oy) ** 2 + (px - ox) ** 2)
-        max_dist = length if length > 0 else 1
-        ratio = min(dist_from_origin / max_dist, 1.0)
-
-        gap_probability = ratio * 0.85
-
-        if rng.random() > gap_probability:
+        if pixels_since_draw >= next_draw_at:
             if 0 <= py < h and 0 <= px < w:
                 tensor[py, px] = 255
+            dist_from_origin = np.sqrt((py - oy) ** 2 + (px - ox) ** 2)
+            max_dist = length if length > 0 else 1
+            ratio = min(dist_from_origin / max_dist, 1.0)
+            spacing = ratio ** 0.6 * 40
+            next_draw_at = max(1, int(spacing + rng.uniform(-spacing * 0.3, spacing * 0.3)))
+            pixels_since_draw = 0
+        else:
+            pixels_since_draw += 1
 
 
 def draw_parabolic_trajectory(
@@ -82,6 +87,8 @@ def draw_parabolic_trajectory(
         return
 
     prev_py, prev_px = cy, cx
+    pixels_since_draw = 0
+    next_draw_at = 0
 
     for i in range(num_steps):
         t = i / num_steps * length
@@ -96,15 +103,17 @@ def draw_parabolic_trajectory(
             segment = [(py, px)]
 
         for sy, sx in segment:
-            dist_from_origin = np.sqrt((sy - oy) ** 2 + (sx - ox) ** 2)
-            max_dist = length if length > 0 else 1
-            ratio = min(dist_from_origin / max_dist, 1.0)
-
-            gap_probability = ratio * 0.85
-
-            if rng.random() > gap_probability:
+            if pixels_since_draw >= next_draw_at:
                 if 0 <= sy < h and 0 <= sx < w:
                     tensor[sy, sx] = 255
+                dist_from_origin = np.sqrt((sy - oy) ** 2 + (sx - ox) ** 2)
+                max_dist = length if length > 0 else 1
+                ratio = min(dist_from_origin / max_dist, 1.0)
+                spacing = ratio ** 0.6 * 40
+                next_draw_at = max(1, int(spacing + rng.uniform(-spacing * 0.3, spacing * 0.3)))
+                pixels_since_draw = 0
+            else:
+                pixels_since_draw += 1
 
         prev_py, prev_px = py, px
 
