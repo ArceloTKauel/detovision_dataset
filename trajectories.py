@@ -48,6 +48,7 @@ def draw_trajectory(
 
     pixels_since_draw = 0
     next_draw_at = 0
+    max_spacing = 50
 
     for py, px in points:
         if pixels_since_draw >= next_draw_at:
@@ -56,7 +57,7 @@ def draw_trajectory(
             dist_from_origin = np.sqrt((py - oy) ** 2 + (px - ox) ** 2)
             max_dist = length if length > 0 else 1
             ratio = min(dist_from_origin / max_dist, 1.0)
-            spacing = ratio ** 0.6 * 40
+            spacing = ratio ** 2 * max_spacing
             next_draw_at = max(1, int(spacing + rng.uniform(-spacing * 0.3, spacing * 0.3)))
             pixels_since_draw = 0
         else:
@@ -89,6 +90,7 @@ def draw_parabolic_trajectory(
     prev_py, prev_px = cy, cx
     pixels_since_draw = 0
     next_draw_at = 0
+    max_spacing = 50
 
     for i in range(num_steps):
         t = i / num_steps * length
@@ -109,7 +111,7 @@ def draw_parabolic_trajectory(
                 dist_from_origin = np.sqrt((sy - oy) ** 2 + (sx - ox) ** 2)
                 max_dist = length if length > 0 else 1
                 ratio = min(dist_from_origin / max_dist, 1.0)
-                spacing = ratio ** 0.6 * 40
+                spacing = ratio ** 2 * max_spacing
                 next_draw_at = max(1, int(spacing + rng.uniform(-spacing * 0.3, spacing * 0.3)))
                 pixels_since_draw = 0
             else:
