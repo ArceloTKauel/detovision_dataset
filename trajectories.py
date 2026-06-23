@@ -11,7 +11,8 @@ orgánicas de puntos en vez de puntos solitarios equidistantes.
 
 Todas las funciones aceptan un parámetro opcional mask: si se pasa, dibuja
 las trayectorias completas (todos los píxeles, sin spacing ni ráfagas) como
-clase 2, para la máscara de segmentación RGB.
+clase 2, solo sobre píxeles de fondo (clase 0). El humo tiene prioridad
+sobre las trayectorias en la máscara (humo > trayectoria > fondo).
 
 Funciones:
     - bresenham(y0, x0, y1, x1): Algoritmo de Bresenham para rasterizar una

@@ -66,4 +66,4 @@ Se usan tres capas de Perlin noise:
 El dron "mira" hacia el centro del lienzo. Este ángulo modula la curvatura de las trayectorias parabólicas: trayectorias perpendiculares al dron curvan más (efecto de perspectiva), las paralelas casi nada.
 
 ### Máscara de segmentación
-La máscara se construye durante el mismo pase de generación usando un tensor de etiquetas (0=fondo, 1=humo, 2=trayectoria). Las trayectorias tienen prioridad sobre el humo: si una trayectoria cruza el humo, ese píxel se marca como trayectoria (rojo). Al exportar, las etiquetas se convierten a RGB (Azul/Verde/Rojo).
+La máscara se construye durante el mismo pase de generación usando un tensor de etiquetas (0=fondo, 1=humo, 2=trayectoria). La prioridad de clases es **humo > trayectoria > fondo**: si una trayectoria cruza el humo, ese píxel se mantiene como humo (verde). Las trayectorias solo se marcan sobre el fondo. Tras la binarización del B/W, se sincronizan los píxeles de humo que no sobrevivieron el umbral (brillo < 128) reseteándolos a fondo en la máscara. Al exportar, las etiquetas se convierten a RGB (Azul/Verde/Rojo).
