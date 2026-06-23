@@ -1,3 +1,22 @@
+"""
+canvas.py - Creación del lienzo y geometría base de la explosión.
+
+Genera el tensor vacío (escala de grises), crea un cuadrilátero aleatorio que
+define la zona de impacto, calcula su centroide, y distribuye puntos dentro
+del cuadrilátero que actúan como centros de fragmentos/metralla.
+
+Funciones:
+    - create_canvas(height, width): Crea un tensor 2D de ceros (fondo negro).
+    - generate_quadrilateral(height, width, rng, margin): Genera 4 vértices
+      aleatorios alrededor de un centro random, formando la zona de impacto.
+    - centroid_of_polygon(vertices): Calcula el centroide promediando vértices.
+    - draw_center(tensor, center, size): Dibuja un cuadrado blanco de lado
+      (2*size+1) centrado en la posición dada.
+    - distribute_centers_in_quadrilateral(vertices, num_points, rng): Distribuye
+      puntos aleatorios uniformemente dentro del cuadrilátero usando muestreo
+      por triángulos.
+"""
+
 import numpy as np
 
 
@@ -8,16 +27,18 @@ def create_canvas(height: int, width: int) -> np.ndarray:
 def generate_quadrilateral(
     height: int, width: int, rng: np.random.Generator, margin: float = 0.15
 ) -> np.ndarray:
+    # Centro del cuadrilátero: posición aleatoria respetando márgenes
     cx = rng.integers(int(width * margin), int(width * (1 - margin)))
     cy = rng.integers(int(height * margin), int(height * (1 - margin)))
 
+    # 4 vértices a distancias y ángulos aleatorios desde el centro
     angles = np.sort(rng.uniform(0, 2 * np.pi, size=4))
     radii = rng.uniform(20, 60, size=4)
 
     vertices = np.zeros((4, 2), dtype=np.float64)
     for i in range(4):
-        vertices[i, 0] = cy + radii[i] * np.sin(angles[i])
-        vertices[i, 1] = cx + radii[i] * np.cos(angles[i])
+        vertices[i, 0] = cy + radii[i] * np.sin(angles[i])  # coordenada Y
+        vertices[i, 1] = cx + radii[i] * np.cos(angles[i])  # coordenada X
 
     return vertices
 
@@ -33,6 +54,7 @@ def draw_center(
     center: tuple[int, int],
     size: int,
 ) -> None:
+    """Dibuja un cuadrado blanco de lado (2*size+1) píxeles."""
     h, w = tensor.shape
     cy, cx = center
     for dy in range(-size, size + 1):
@@ -47,13 +69,22 @@ def distribute_centers_in_quadrilateral(
     num_points: int,
     rng: np.random.Generator,
 ) -> list[tuple[int, int]]:
+    """
+    Muestreo uniforme dentro del cuadrilátero.
+    Se divide en 2 triángulos (v0-v1-v2 y v0-v2-v3) y se elige uno al azar
+    para cada punto. Dentro del triángulo se usa muestreo baricéntrico:
+    si r1+r2 > 1 se reflejan para mantener uniformidad.
+    """
     v0, v1, v2, v3 = vertices
     centers = []
     for _ in range(num_points):
+        # Elegir triángulo al azar (50/50)
         if rng.random() < 0.5:
             tri = [v0, v1, v2]
         else:
             tri = [v0, v2, v3]
+
+        # Muestreo baricéntrico uniforme
         r1 = rng.random()
         r2 = rng.random()
         if r1 + r2 > 1:
