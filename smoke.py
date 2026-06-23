@@ -76,6 +76,16 @@ def draw_smoke(
         region[fringe_mask],
     )
 
+    subtractive = perlin_noise_2d(
+        (region_h, region_w), scale=smoke_radius * 0.3, rng=rng, octaves=3
+    )
+    smoke_mask = region > 0
+    erase_threshold = 0.45
+    erase = (subtractive < erase_threshold) & smoke_mask
+    protection = np.clip(1.0 - distorted_dist / (core_radius * 1.5), 0, 1)
+    erase = erase & (rng.random(region.shape) > protection)
+    region[erase] = 0
+
 
 def measure_smoke_width(
     tensor: np.ndarray,
