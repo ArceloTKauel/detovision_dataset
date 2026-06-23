@@ -10,8 +10,9 @@ Funciones:
     - generate_quadrilateral(height, width, rng, margin): Genera 4 vértices
       aleatorios alrededor de un centro random, formando la zona de impacto.
     - centroid_of_polygon(vertices): Calcula el centroide promediando vértices.
-    - draw_center(tensor, center, size): Dibuja un cuadrado blanco de lado
-      (2*size+1) centrado en la posición dada.
+    - draw_center(tensor, center, size, mask): Dibuja un cuadrado blanco de lado
+      (2*size+1) centrado en la posición dada. Si se pasa mask, marca los
+      píxeles como humo (clase 1).
     - distribute_centers_in_quadrilateral(vertices, num_points, rng): Distribuye
       puntos aleatorios uniformemente dentro del cuadrilátero usando muestreo
       por triángulos.

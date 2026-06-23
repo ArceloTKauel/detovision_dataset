@@ -4,14 +4,22 @@ trajectories.py - Generación de trayectorias de metralla (rectas y parabólicas
 Dibuja las líneas punteadas que salen de la explosión simulando fragmentos
 proyectados. Usa Bresenham para rasterizar las líneas y un sistema de spacing
 variable: los puntos son densos cerca del origen y se separan cuadráticamente
-con la distancia (ratio² * max_spacing), simulando la desaceleración de la metralla.
+con la distancia (ratio² * max_spacing), simulando la desaceleración de la
+metralla. Además, cada punto de dibujo inicia una "ráfaga" de 1-5 píxeles
+consecutivos (cada uno con 70% de probabilidad) para generar agrupaciones
+orgánicas de puntos en vez de puntos solitarios equidistantes.
+
+Todas las funciones aceptan un parámetro opcional mask: si se pasa, dibuja
+las trayectorias completas (todos los píxeles, sin spacing ni ráfagas) como
+clase 2, para la máscara de segmentación RGB.
 
 Funciones:
     - bresenham(y0, x0, y1, x1): Algoritmo de Bresenham para rasterizar una
       línea entre dos puntos. Retorna lista de coordenadas (y, x).
-    - draw_trajectory(...): Dibuja una trayectoria recta punteada.
-    - draw_parabolic_trajectory(...): Dibuja una trayectoria curva punteada.
-      La curva se calcula como desplazamiento cuadrático perpendicular al ángulo.
+    - draw_trajectory(...): Dibuja una trayectoria recta punteada con ráfagas.
+    - draw_parabolic_trajectory(...): Dibuja una trayectoria curva punteada
+      con ráfagas. La curva se calcula como desplazamiento cuadrático
+      perpendicular al ángulo.
     - draw_straight_trajectories(...): Genera N trayectorias rectas desde
       centros aleatorios, con longitud mínima = ancho del humo en esa dirección.
     - draw_parabolic_trajectories(...): Genera N trayectorias parabólicas.

@@ -7,9 +7,11 @@ Perlin para bordes irregulares. Luego genera polígonos aleatorios que
 "recortan" huecos dentro del humo, simulando manchas/huecos realistas.
 
 Funciones:
-    - draw_smoke(tensor, centers, smoke_radius, rng): Dibuja el humo completo
-      sobre el tensor. Usa distancia mínima a cualquier centro para determinar
-      la zona, y Perlin noise para distorsionar radios y variar brillo.
+    - draw_smoke(tensor, centers, smoke_radius, rng, mask): Dibuja el humo
+      completo sobre el tensor. Usa distancia mínima a cualquier centro para
+      determinar la zona, y Perlin noise para distorsionar radios y variar
+      brillo. Si se pasa mask, marca los píxeles de humo como clase 1
+      (y borra de la mask donde caen las manchas sustractivas).
     - measure_smoke_width(tensor, origin, angle): Mide la distancia desde el
       origen en una dirección dada hasta encontrar un píxel negro. Usado por
       trajectories.py para que las trayectorias empiecen fuera del humo.

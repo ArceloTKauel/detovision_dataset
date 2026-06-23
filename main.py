@@ -1,15 +1,18 @@
 """
 main.py - Punto de entrada del generador de dataset sintético de explosiones.
 
-Orquesta el pipeline completo de generación: crea el lienzo, genera la zona de
-impacto (cuadrilátero), distribuye centros de metralla, dibuja el humo con
-textura Perlin, traza trayectorias rectas y parabólicas, y exporta el resultado
-como imagen PNG en escala de grises binarizada (blanco/negro).
+Orquesta el pipeline completo de generación en un solo pase: crea el lienzo,
+genera la zona de impacto (cuadrilátero), distribuye centros de metralla,
+dibuja el humo con textura Perlin, traza trayectorias rectas y parabólicas,
+y produce simultáneamente dos salidas:
+    - Imagen B/W (entrada del dataset): binarizada, con trayectorias punteadas.
+    - Máscara RGB (salida del dataset): segmentación por colores.
+      Rojo=trayectorias (continuas), Verde=humo, Azul=fondo.
 
 Funciones:
-    - generate_explosion(height, width, rng): Genera un tensor 2D con una
-      explosión sintética completa. Retorna un np.ndarray binarizado (0 o 255).
-    - main(): Genera 4 imágenes de ejemplo y las guarda como explosion_N.png.
+    - generate_explosion(height, width, rng): Genera la explosión completa.
+      Retorna una tupla (tensor B/W, mask de segmentación).
+    - main(): Genera 4 pares de imágenes (explosion_N.png + explosion_N_mask.png).
 """
 
 import numpy as np
