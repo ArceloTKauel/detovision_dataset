@@ -7,7 +7,7 @@ dibuja el humo con textura Perlin, traza trayectorias rectas y parabólicas,
 y produce simultáneamente dos salidas:
     - Imagen B/W (entrada del dataset): binarizada, con trayectorias punteadas.
     - Máscara RGB (salida del dataset): segmentación por colores.
-      Rojo=trayectorias (continuas), Verde=humo, Azul=fondo.
+      Rojo=fondo, Verde=humo, Azul=trayectorias (continuas).
 
 Funciones:
     - generate_explosion(height, width, rng): Genera la explosión completa.
