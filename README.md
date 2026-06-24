@@ -8,19 +8,20 @@ Pares de imágenes PNG de 1280x720 generados simultáneamente en un solo pase:
 
 - **Entrada (B/W)**: imagen binarizada en blanco y negro con trayectorias punteadas, humo con textura y manchas.
 - **Salida (RGB)**: máscara de segmentación con los mismos elementos coloreados por clase:
-  - **Rojo** = trayectorias (líneas continuas, sin gaps)
+  - **Rojo** = fondo
   - **Verde** = humo
-  - **Azul** = fondo
+  - **Azul** = trayectorias (líneas continuas, sin gaps)
 
 ## Estructura del proyecto
 
 ```
-main.py             → Punto de entrada. Orquesta el pipeline y genera ambas imágenes.
-canvas.py           → Lienzo, cuadrilátero de impacto, centros de fragmentos.
-smoke.py            → Humo con zonas concéntricas + manchas sustractivas.
-trajectories.py     → Trayectorias rectas y parabólicas con spacing cuadrático + ráfagas.
-perlin_noise.py     → Implementación de Perlin noise 2D con octavas.
-export.py           → Conversión de tensor a imagen PNG (B/W y RGB).
+main.py               → Punto de entrada. Orquesta el pipeline y genera ambas imágenes.
+generate_dataset.py   → Generación masiva (10k pares) con multiprocessing.
+canvas.py             → Lienzo, cuadrilátero de impacto, centros de fragmentos.
+smoke.py              → Humo con zonas concéntricas + manchas sustractivas.
+trajectories.py       → Trayectorias rectas y parabólicas con spacing cuadrático + ráfagas.
+perlin_noise.py       → Implementación de Perlin noise 2D con octavas.
+export.py             → Conversión de tensor a imagen PNG (B/W y RGB).
 ```
 
 ## Pipeline de generación
@@ -35,16 +36,35 @@ Ambas salidas (B/W y máscara RGB) se generan en el mismo pase, compartiendo tod
 6. Calcular ángulo del dron (influye en curvatura de parábolas)
 7. Dibujar trayectorias rectas (1-15) y parabólicas (1-15):
    - En B/W: punteadas con spacing cuadrático + ráfagas de 1-5 píxeles
-   - En máscara: líneas continuas completas → rojo
+   - En máscara: líneas continuas completas → azul
 8. Binarizar B/W: píxeles ≥ 128 → blanco, resto → negro
 
 ## Uso
+
+### Prueba rápida (4 pares)
 
 ```bash
 uv run main.py
 ```
 
 Genera 4 pares: `explosion_N.png` (entrada B/W) + `explosion_N_mask.png` (salida RGB).
+
+### Generación del dataset completo (10k pares)
+
+```bash
+uv run generate_dataset.py
+```
+
+Genera 10,000 pares de imágenes usando multiprocessing (autodetecta cores de la CPU).
+Las imágenes se guardan en:
+
+```
+dataset/
+    inputs/     → 00000.png a 09999.png (B/W binarizadas)
+    targets/    → 00000.png a 09999.png (máscaras RGB)
+```
+
+Cada índice se usa como semilla aleatoria, por lo que el dataset es reproducible.
 
 ## Dependencias
 
@@ -66,4 +86,4 @@ Se usan tres capas de Perlin noise:
 El dron "mira" hacia el centro del lienzo. Este ángulo modula la curvatura de las trayectorias parabólicas: trayectorias perpendiculares al dron curvan más (efecto de perspectiva), las paralelas casi nada.
 
 ### Máscara de segmentación
-La máscara se construye durante el mismo pase de generación usando un tensor de etiquetas (0=fondo, 1=humo, 2=trayectoria). La prioridad de clases es **humo > trayectoria > fondo**: si una trayectoria cruza el humo, ese píxel se mantiene como humo (verde). Las trayectorias solo se marcan sobre el fondo. Tras la binarización del B/W, se sincronizan los píxeles de humo que no sobrevivieron el umbral (brillo < 128) reseteándolos a fondo en la máscara. Al exportar, las etiquetas se convierten a RGB (Azul/Verde/Rojo).
+La máscara se construye durante el mismo pase de generación usando un tensor de etiquetas (0=fondo, 1=humo, 2=trayectoria). La prioridad de clases es **humo > trayectoria > fondo**: si una trayectoria cruza el humo, ese píxel se mantiene como humo (verde). Las trayectorias solo se marcan sobre el fondo. Tras la binarización del B/W, se sincronizan los píxeles de humo que no sobrevivieron el umbral (brillo < 128) reseteándolos a fondo en la máscara. Al exportar, las etiquetas se convierten a RGB (Rojo/Verde/Azul).
