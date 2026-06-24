@@ -17,7 +17,6 @@ from PIL import Image
 def tensor_to_image(tensor: np.ndarray, path: str) -> None:
     image = Image.fromarray(tensor, mode="L")
     image.save(path)
-    print(f"Imagen guardada en: {path}")
 
 
 def mask_to_rgb(mask: np.ndarray, path: str) -> None:
@@ -31,4 +30,3 @@ def mask_to_rgb(mask: np.ndarray, path: str) -> None:
 
     image = Image.fromarray(rgb, mode="RGB")
     image.save(path)
-    print(f"Máscara guardada en: {path}")
