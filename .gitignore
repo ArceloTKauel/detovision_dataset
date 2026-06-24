@@ -16,6 +16,9 @@ build/
 *.bmp
 *.tiff
 
+# Dataset generado
+dataset/
+
 # OS
 .DS_Store
 Thumbs.db
