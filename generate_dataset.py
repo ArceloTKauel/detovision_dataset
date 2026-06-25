@@ -1,17 +1,22 @@
-"""
-generate_dataset.py - Generación masiva del dataset sintético.
-
-Genera N pares de imágenes (entrada B/W + máscara RGB) usando multiprocessing
-para aprovechar todos los cores disponibles de la CPU.
-
-Estructura de salida:
-    dataset/
-        inputs/     → imágenes B/W binarizadas (entrada del modelo)
-        targets/    → máscaras RGB de segmentación (salida esperada)
-"""
+# /// script
+# dependencies = [
+#   "tqdm",
+# ]
+# ///
+#
+# Generación masiva del dataset sintético.
+#
+# Genera N pares de imágenes (entrada B/W + máscara RGB) usando multiprocessing
+# para aprovechar todos los cores disponibles de la CPU.
+#
+# Estructura de salida:
+#     dataset/
+#         inputs/     → imágenes B/W binarizadas (entrada del modelo)
+#         targets/    → máscaras RGB de segmentación (salida esperada)
 
 import os
 from multiprocessing import Pool
+from tqdm import tqdm
 
 from main import generate_explosion, HEIGHT, WIDTH
 from export import tensor_to_image, mask_to_rgb
@@ -42,12 +47,9 @@ def main():
     workers = max(1, os.cpu_count() - 2)
     print(f"Generando {TOTAL_IMAGES} pares de imágenes con {workers} workers...")
 
-    completed = 0
     with Pool(processes=workers) as pool:
-        for index in pool.imap_unordered(generate_single, range(TOTAL_IMAGES)):
-            completed += 1
-            if completed % 100 == 0 or completed == TOTAL_IMAGES:
-                print(f"  Progreso: {completed}/{TOTAL_IMAGES} ({completed * 100 // TOTAL_IMAGES}%)")
+        for _ in tqdm(pool.imap_unordered(generate_single, range(TOTAL_IMAGES)), total=TOTAL_IMAGES, desc="Generando", unit="img"):
+            pass
 
     print("Dataset generado exitosamente.")
 
