@@ -28,8 +28,8 @@ from smoke import draw_smoke
 from trajectories import draw_trajectories
 from export import tensor_to_image, mask_to_rgb
 
-HEIGHT = 720
-WIDTH = 1280
+HEIGHT = 1920
+WIDTH = 1080
 
 
 def generate_explosion(height: int, width: int, rng: np.random.Generator | None = None) -> tuple[np.ndarray, np.ndarray]:
