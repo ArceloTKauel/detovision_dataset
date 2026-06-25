@@ -1,8 +1,3 @@
-# /// script
-# dependencies = [
-#   "tqdm",
-# ]
-# ///
 #
 # Generación masiva del dataset sintético.
 #
