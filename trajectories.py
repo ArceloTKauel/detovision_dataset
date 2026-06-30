@@ -100,16 +100,11 @@ def draw_trajectory(
     points = bresenham(cy, cx, end_y, end_x)
     total_len = max(len(points), 1)
 
-    # Mask: dibujar trayectoria completa (sin spacing), solo sobre fondo
-    if mask is not None:
-        for py, px in points:
-            if 0 <= py < h and 0 <= px < w:
-                _paint_traj_mask(mask, py, px, h, w)
-
     pixels_since_draw = 0
     next_draw_at = 0
     burst_remaining = 0
     erase_remaining = 0
+    pixels_drawn = 0
     max_spacing = 50
 
     for py, px in points:
@@ -122,6 +117,7 @@ def draw_trajectory(
             if rng.random() < 0.7:
                 if 0 <= py < h and 0 <= px < w:
                     tensor[py, px] = 255
+                    pixels_drawn += 1
             burst_remaining -= 1
             continue
 
@@ -134,6 +130,7 @@ def draw_trajectory(
             else:
                 if 0 <= py < h and 0 <= px < w:
                     tensor[py, px] = 255
+                    pixels_drawn += 1
 
                 # Iniciar ráfaga de 1-5 píxeles consecutivos
                 burst_remaining = rng.integers(1, 6) - 1
@@ -147,6 +144,12 @@ def draw_trajectory(
                 pixels_since_draw = 0
         else:
             pixels_since_draw += 1
+
+    # Mask: solo si la trayectoria tiene al menos un píxel visible en el tensor
+    if mask is not None and pixels_drawn > 0:
+        for py, px in points:
+            if 0 <= py < h and 0 <= px < w:
+                _paint_traj_mask(mask, py, px, h, w)
 
 
 def draw_parabolic_trajectory(
@@ -190,6 +193,8 @@ def draw_parabolic_trajectory(
     next_draw_at = 0
     burst_remaining = 0
     erase_remaining = 0
+    pixels_drawn = 0
+    all_points = []
     max_spacing = 50
 
     for i in range(num_steps):
@@ -205,9 +210,7 @@ def draw_parabolic_trajectory(
             segment = [(py, px)]
 
         for sy, sx in segment:
-            # Mask: dibujar trayectoria completa, solo sobre fondo
-            if mask is not None and 0 <= sy < h and 0 <= sx < w:
-                _paint_traj_mask(mask, sy, sx, h, w)
+            all_points.append((sy, sx))
 
             if erase_remaining > 0:
                 erase_remaining -= 1
@@ -217,6 +220,7 @@ def draw_parabolic_trajectory(
                 if rng.random() < 0.7:
                     if 0 <= sy < h and 0 <= sx < w:
                         tensor[sy, sx] = 255
+                        pixels_drawn += 1
                 burst_remaining -= 1
                 continue
 
@@ -229,6 +233,7 @@ def draw_parabolic_trajectory(
                 else:
                     if 0 <= sy < h and 0 <= sx < w:
                         tensor[sy, sx] = 255
+                        pixels_drawn += 1
 
                     burst_remaining = rng.integers(1, 6) - 1
 
@@ -242,6 +247,12 @@ def draw_parabolic_trajectory(
                 pixels_since_draw += 1
 
         prev_py, prev_px = py, px
+
+    # Mask: solo si la trayectoria tiene al menos un píxel visible en el tensor
+    if mask is not None and pixels_drawn > 0:
+        for sy, sx in all_points:
+            if 0 <= sy < h and 0 <= sx < w:
+                _paint_traj_mask(mask, sy, sx, h, w)
 
 
 def draw_straight_trajectories(
