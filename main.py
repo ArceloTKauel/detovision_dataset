@@ -28,7 +28,7 @@ from smoke import draw_smoke
 from trajectories import draw_trajectories
 from export import tensor_to_image, mask_to_rgb
 
-HEIGHT = 1088
+HEIGHT = 1280
 WIDTH = 1920
 
 
