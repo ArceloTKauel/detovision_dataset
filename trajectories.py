@@ -104,13 +104,19 @@ def draw_trajectory(
     next_draw_at = 0
     burst_remaining = 0
     erase_remaining = 0
+    grace_remaining = 0
     pixels_drawn = 0
     max_spacing = 50
 
     for py, px in points:
         if erase_remaining > 0:
             erase_remaining -= 1
+            if erase_remaining == 0:
+                grace_remaining = int(rng.uniform(0.05, 0.15) * total_len)
             continue
+
+        if grace_remaining > 0:
+            grace_remaining -= 1
 
         # Ráfaga activa: cada píxel de la ráfaga tiene 70% de probabilidad de dibujarse
         if burst_remaining > 0:
@@ -122,7 +128,7 @@ def draw_trajectory(
             continue
 
         if pixels_since_draw >= next_draw_at:
-            if rng.random() < erase_prob:
+            if grace_remaining == 0 and rng.random() < erase_prob:
                 frac = rng.uniform(erase_frac_range[0], erase_frac_range[1])
                 erase_remaining = max(1, int(frac * total_len))
                 pixels_since_draw = 0
@@ -132,8 +138,8 @@ def draw_trajectory(
                     tensor[py, px] = 255
                     pixels_drawn += 1
 
-                # Iniciar ráfaga de 1-5 píxeles consecutivos
-                burst_remaining = rng.integers(1, 6) - 1
+                # Iniciar ráfaga de 1-3 píxeles consecutivos
+                burst_remaining = rng.integers(0, 3)
 
                 # Spacing cuadrático: ratio² * max_spacing
                 dist_from_origin = np.sqrt((py - oy) ** 2 + (px - ox) ** 2)
@@ -193,6 +199,7 @@ def draw_parabolic_trajectory(
     next_draw_at = 0
     burst_remaining = 0
     erase_remaining = 0
+    grace_remaining = 0
     pixels_drawn = 0
     all_points = []
     max_spacing = 50
@@ -214,7 +221,12 @@ def draw_parabolic_trajectory(
 
             if erase_remaining > 0:
                 erase_remaining -= 1
+                if erase_remaining == 0:
+                    grace_remaining = int(rng.uniform(0.05, 0.15) * total_len)
                 continue
+
+            if grace_remaining > 0:
+                grace_remaining -= 1
 
             if burst_remaining > 0:
                 if rng.random() < 0.7:
@@ -225,7 +237,7 @@ def draw_parabolic_trajectory(
                 continue
 
             if pixels_since_draw >= next_draw_at:
-                if rng.random() < erase_prob:
+                if grace_remaining == 0 and rng.random() < erase_prob:
                     frac = rng.uniform(erase_frac_range[0], erase_frac_range[1])
                     erase_remaining = max(1, int(frac * total_len))
                     pixels_since_draw = 0
@@ -235,7 +247,7 @@ def draw_parabolic_trajectory(
                         tensor[sy, sx] = 255
                         pixels_drawn += 1
 
-                    burst_remaining = rng.integers(1, 6) - 1
+                    burst_remaining = rng.integers(0, 3)
 
                     dist_from_origin = np.sqrt((sy - oy) ** 2 + (sx - ox) ** 2)
                     max_dist = length if length > 0 else 1
@@ -277,9 +289,13 @@ def draw_straight_trajectories(
         min_length = max(10, smoke_width)
         length = rng.uniform(min_length, diagonal)
 
-        erase_prob = rng.uniform(0.0, 0.20)
-        frac_lo = rng.uniform(0.003, 0.015)
-        frac_hi = rng.uniform(frac_lo, 0.04)
+        if rng.random() < 0.5:
+            erase_prob = rng.uniform(0.0, 0.20)
+            frac_lo = rng.uniform(0.01, 0.03)
+            frac_hi = rng.uniform(frac_lo, 0.05)
+        else:
+            erase_prob = 0.0
+            frac_lo, frac_hi = 0.0, 0.0
         draw_trajectory(tensor, center, angle, length, origin, rng, mask, erase_prob, (frac_lo, frac_hi))
 
 
@@ -318,9 +334,13 @@ def draw_parabolic_trajectories(
         curvature_factor = abs(np.sin(angle_diff))
         curvature *= curvature_factor
 
-        erase_prob = rng.uniform(0.0, 0.20)
-        frac_lo = rng.uniform(0.003, 0.015)
-        frac_hi = rng.uniform(frac_lo, 0.04)
+        if rng.random() < 0.5:
+            erase_prob = rng.uniform(0.0, 0.20)
+            frac_lo = rng.uniform(0.01, 0.03)
+            frac_hi = rng.uniform(frac_lo, 0.05)
+        else:
+            erase_prob = 0.0
+            frac_lo, frac_hi = 0.0, 0.0
         draw_parabolic_trajectory(tensor, center, angle, length, curvature, origin, rng, mask, erase_prob, (frac_lo, frac_hi))
 
 
