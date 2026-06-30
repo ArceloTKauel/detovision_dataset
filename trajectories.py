@@ -33,6 +33,16 @@ import numpy as np
 
 from smoke import measure_smoke_width
 
+_HW = 1  # half-width: trayectorias de 3 píxeles (2*_HW+1)
+
+
+def _paint_traj_mask(mask: np.ndarray, py: int, px: int, h: int, w: int) -> None:
+    for dy in range(-_HW, _HW + 1):
+        for dx in range(-_HW, _HW + 1):
+            ny, nx = py + dy, px + dx
+            if 0 <= ny < h and 0 <= nx < w and mask[ny, nx] == 0:
+                mask[ny, nx] = 2
+
 
 def bresenham(y0: int, x0: int, y1: int, x1: int) -> list[tuple[int, int]]:
     """Rasterización de línea entre (y0,x0) y (y1,x1). Retorna todos los píxeles."""
@@ -93,8 +103,8 @@ def draw_trajectory(
     # Mask: dibujar trayectoria completa (sin spacing), solo sobre fondo
     if mask is not None:
         for py, px in points:
-            if 0 <= py < h and 0 <= px < w and mask[py, px] == 0:
-                mask[py, px] = 2
+            if 0 <= py < h and 0 <= px < w:
+                _paint_traj_mask(mask, py, px, h, w)
 
     pixels_since_draw = 0
     next_draw_at = 0
@@ -196,8 +206,8 @@ def draw_parabolic_trajectory(
 
         for sy, sx in segment:
             # Mask: dibujar trayectoria completa, solo sobre fondo
-            if mask is not None and 0 <= sy < h and 0 <= sx < w and mask[sy, sx] == 0:
-                mask[sy, sx] = 2
+            if mask is not None and 0 <= sy < h and 0 <= sx < w:
+                _paint_traj_mask(mask, sy, sx, h, w)
 
             if erase_remaining > 0:
                 erase_remaining -= 1
