@@ -66,11 +66,15 @@ def draw_trajectory(
     origin: tuple[int, int],
     rng: np.random.Generator,
     mask: np.ndarray | None = None,
+    erase_prob: float = 0.0,
+    erase_frac_range: tuple[float, float] = (0.01, 0.05),
 ) -> None:
     """
     Dibuja una trayectoria recta punteada desde center en la dirección angle.
     El spacing entre puntos crece cuadráticamente con la distancia al origen:
     cerca = denso, lejos = disperso. Simula desaceleración de metralla.
+    erase_prob: probabilidad por oportunidad de dibujo de activar un borrado.
+    erase_frac_range: (min, max) fracción del largo total a borrar por sección.
     """
     h, w = tensor.shape
     cy, cx = center
@@ -84,6 +88,7 @@ def draw_trajectory(
     end_x = np.clip(end_x, 0, w - 1)
 
     points = bresenham(cy, cx, end_y, end_x)
+    total_len = max(len(points), 1)
 
     # Mask: dibujar trayectoria completa (sin spacing), solo sobre fondo
     if mask is not None:
@@ -94,9 +99,14 @@ def draw_trajectory(
     pixels_since_draw = 0
     next_draw_at = 0
     burst_remaining = 0
+    erase_remaining = 0
     max_spacing = 50
 
     for py, px in points:
+        if erase_remaining > 0:
+            erase_remaining -= 1
+            continue
+
         # Ráfaga activa: cada píxel de la ráfaga tiene 70% de probabilidad de dibujarse
         if burst_remaining > 0:
             if rng.random() < 0.7:
@@ -106,19 +116,25 @@ def draw_trajectory(
             continue
 
         if pixels_since_draw >= next_draw_at:
-            if 0 <= py < h and 0 <= px < w:
-                tensor[py, px] = 255
+            if rng.random() < erase_prob:
+                frac = rng.uniform(erase_frac_range[0], erase_frac_range[1])
+                erase_remaining = max(1, int(frac * total_len))
+                pixels_since_draw = 0
+                next_draw_at = 1
+            else:
+                if 0 <= py < h and 0 <= px < w:
+                    tensor[py, px] = 255
 
-            # Iniciar ráfaga de 1-5 píxeles consecutivos
-            burst_remaining = rng.integers(1, 6) - 1
+                # Iniciar ráfaga de 1-5 píxeles consecutivos
+                burst_remaining = rng.integers(1, 6) - 1
 
-            # Spacing cuadrático: ratio² * max_spacing
-            dist_from_origin = np.sqrt((py - oy) ** 2 + (px - ox) ** 2)
-            max_dist = length if length > 0 else 1
-            ratio = min(dist_from_origin / max_dist, 1.0)
-            spacing = ratio ** 2 * max_spacing
-            next_draw_at = max(1, int(spacing + rng.uniform(-spacing * 0.3, spacing * 0.3)))
-            pixels_since_draw = 0
+                # Spacing cuadrático: ratio² * max_spacing
+                dist_from_origin = np.sqrt((py - oy) ** 2 + (px - ox) ** 2)
+                max_dist = length if length > 0 else 1
+                ratio = min(dist_from_origin / max_dist, 1.0)
+                spacing = ratio ** 2 * max_spacing
+                next_draw_at = max(1, int(spacing + rng.uniform(-spacing * 0.3, spacing * 0.3)))
+                pixels_since_draw = 0
         else:
             pixels_since_draw += 1
 
@@ -132,12 +148,16 @@ def draw_parabolic_trajectory(
     origin: tuple[int, int],
     rng: np.random.Generator,
     mask: np.ndarray | None = None,
+    erase_prob: float = 0.0,
+    erase_frac_range: tuple[float, float] = (0.01, 0.05),
 ) -> None:
     """
     Dibuja una trayectoria parabólica punteada.
     La curva se genera como: posición = avance lineal + offset cuadrático perpendicular.
     El offset perpendicular es curvature * t², donde t es la distancia recorrida.
     Usa Bresenham para interpolar saltos entre pasos consecutivos.
+    erase_prob: probabilidad por oportunidad de dibujo de activar un borrado.
+    erase_frac_range: (min, max) fracción del largo total a borrar por sección.
     """
     h, w = tensor.shape
     cy, cx = center
@@ -154,10 +174,12 @@ def draw_parabolic_trajectory(
     if num_steps < 2:
         return
 
+    total_len = max(num_steps, 1)
     prev_py, prev_px = cy, cx
     pixels_since_draw = 0
     next_draw_at = 0
     burst_remaining = 0
+    erase_remaining = 0
     max_spacing = 50
 
     for i in range(num_steps):
@@ -177,6 +199,10 @@ def draw_parabolic_trajectory(
             if mask is not None and 0 <= sy < h and 0 <= sx < w and mask[sy, sx] == 0:
                 mask[sy, sx] = 2
 
+            if erase_remaining > 0:
+                erase_remaining -= 1
+                continue
+
             if burst_remaining > 0:
                 if rng.random() < 0.7:
                     if 0 <= sy < h and 0 <= sx < w:
@@ -185,17 +211,23 @@ def draw_parabolic_trajectory(
                 continue
 
             if pixels_since_draw >= next_draw_at:
-                if 0 <= sy < h and 0 <= sx < w:
-                    tensor[sy, sx] = 255
+                if rng.random() < erase_prob:
+                    frac = rng.uniform(erase_frac_range[0], erase_frac_range[1])
+                    erase_remaining = max(1, int(frac * total_len))
+                    pixels_since_draw = 0
+                    next_draw_at = 1
+                else:
+                    if 0 <= sy < h and 0 <= sx < w:
+                        tensor[sy, sx] = 255
 
-                burst_remaining = rng.integers(1, 6) - 1
+                    burst_remaining = rng.integers(1, 6) - 1
 
-                dist_from_origin = np.sqrt((sy - oy) ** 2 + (sx - ox) ** 2)
-                max_dist = length if length > 0 else 1
-                ratio = min(dist_from_origin / max_dist, 1.0)
-                spacing = ratio ** 2 * max_spacing
-                next_draw_at = max(1, int(spacing + rng.uniform(-spacing * 0.3, spacing * 0.3)))
-                pixels_since_draw = 0
+                    dist_from_origin = np.sqrt((sy - oy) ** 2 + (sx - ox) ** 2)
+                    max_dist = length if length > 0 else 1
+                    ratio = min(dist_from_origin / max_dist, 1.0)
+                    spacing = ratio ** 2 * max_spacing
+                    next_draw_at = max(1, int(spacing + rng.uniform(-spacing * 0.3, spacing * 0.3)))
+                    pixels_since_draw = 0
             else:
                 pixels_since_draw += 1
 
@@ -224,7 +256,10 @@ def draw_straight_trajectories(
         min_length = max(10, smoke_width)
         length = rng.uniform(min_length, diagonal)
 
-        draw_trajectory(tensor, center, angle, length, origin, rng, mask)
+        erase_prob = rng.uniform(0.0, 0.20)
+        frac_lo = rng.uniform(0.003, 0.015)
+        frac_hi = rng.uniform(frac_lo, 0.04)
+        draw_trajectory(tensor, center, angle, length, origin, rng, mask, erase_prob, (frac_lo, frac_hi))
 
 
 def draw_parabolic_trajectories(
@@ -262,7 +297,10 @@ def draw_parabolic_trajectories(
         curvature_factor = abs(np.sin(angle_diff))
         curvature *= curvature_factor
 
-        draw_parabolic_trajectory(tensor, center, angle, length, curvature, origin, rng, mask)
+        erase_prob = rng.uniform(0.0, 0.20)
+        frac_lo = rng.uniform(0.003, 0.015)
+        frac_hi = rng.uniform(frac_lo, 0.04)
+        draw_parabolic_trajectory(tensor, center, angle, length, curvature, origin, rng, mask, erase_prob, (frac_lo, frac_hi))
 
 
 def draw_trajectories(
