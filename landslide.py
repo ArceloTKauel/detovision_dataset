@@ -7,7 +7,9 @@ podrían haber ocurrido en cualquier parte del encuadre. Todas las franjas de
 una imagen son aproximadamente paralelas entre sí (comparten una dirección
 general con variación leve por franja), pero cada una arranca en un punto
 aleatorio independiente del canvas. Cada franja es **una sola línea**
-central (con wiggle orgánico, no un canal de 2 bordes/riel) con una textura
+central, generada como un "paso del borracho" con sesgo (random walk en el
+rumbo, con atracción leve de vuelta hacia la dirección original — ver
+generate_stripe_axis), no una recta ni un canal de 2 bordes/riel, con una textura
 tipo "peine": trazos cortos perpendiculares que salen de la línea, todos
 hacia el MISMO lado dentro de una franja (no alternan al azar diente por
 diente), como una "T". Ese lado se elige una vez por franja, apuntando
@@ -17,6 +19,12 @@ y largos cerca del punto de inicio de la franja y más dispersos/cortos
 hacia su extremo lejano — mismo esquema de spacing cuadrático que ya usa
 trajectories.py para sus puntos, aplicado acá a densidad de dientes en vez
 de puntos sobre una línea.
+
+Tanto el eje como los dientes se dibujan punteados en el B/W (spacing
+cuadrático + ráfagas de 1-3 píxeles, mismo patrón que trajectories.py),
+mientras que la máscara pinta el trazo completo — igual asimetría mask/tensor
+que ya usan las trayectorias (el B/W simula visibilidad parcial, la máscara
+representa la clase real completa).
 
 Todas las funciones que aceptan mask pintan clase 3 (derrumbe) solo sobre
 píxeles de fondo (clase 0). Esto implementa la prioridad
@@ -30,8 +38,8 @@ derrumbe nunca pasa por encima del humo, incluso a través de los huecos que
 dejan las manchas sustractivas del humo dentro de su propia silueta.
 
 Funciones:
-    - generate_stripe_axis(...): genera el eje central de una franja, con
-      un wiggle orgánico leve (variación menor, mayormente recto).
+    - generate_stripe_axis(...): genera el eje central de una franja como un
+      random walk sesgado (paso del borracho): suave, ni recto ni errático.
     - draw_landslide_stripe(...): dibuja una franja completa (1 línea central
       + textura de dientes perpendiculares), con largo de diente que se
       angosta desde su punto de inicio hacia el extremo lejano.
@@ -54,31 +62,71 @@ def _paint_landslide_mask(mask: np.ndarray, py: int, px: int, h: int, w: int) ->
                 mask[ny, nx] = 3
 
 
-def _draw_line(
+def _line_points(y0: float, x0: float, y1: float, x1: float) -> list[tuple[int, int]]:
+    return bresenham(int(round(y0)), int(round(x0)), int(round(y1)), int(round(x1)))
+
+
+def _draw_dotted(
     tensor: np.ndarray,
     mask: np.ndarray | None,
-    y0: float,
-    x0: float,
-    y1: float,
-    x1: float,
+    points: list[tuple[int, int]],
+    rng: np.random.Generator,
     exclude_origin: tuple[float, float] | None = None,
     exclude_radius: float = 0.0,
+    max_spacing: float = 50.0,
 ) -> None:
     """
-    Dibuja un segmento con Bresenham, pintando tensor y mask (clase 3).
-    Si se pasa exclude_origin/exclude_radius, se saltea cualquier píxel
-    dentro de ese radio (la franja nunca pasa por encima de la explosión).
+    Dibuja una polilínea (lista de píxeles ya rasterizados) con el mismo
+    patrón punteado que trajectories.py: spacing cuadrático (ratio² *
+    max_spacing, denso al inicio de la lista y disperso al final) más
+    "ráfagas" de 1-3 píxeles consecutivos con 70% de probabilidad cada uno.
+
+    La máscara pinta el trazo COMPLETO (clase 3) sin puntear — representa el
+    derrumbe real; el B/W queda punteado, simulando visibilidad parcial
+    (misma asimetría mask/tensor que ya usan las trayectorias).
+
+    Si se pasa exclude_origin/exclude_radius, ningún píxel dentro de ese
+    radio se dibuja (ni en tensor ni en mask).
     """
     h, w = tensor.shape
-    points = bresenham(int(round(y0)), int(round(x0)), int(round(y1)), int(round(x1)))
+    total_len = max(len(points), 1)
     ey, ex = exclude_origin if exclude_origin is not None else (0.0, 0.0)
-    for py, px in points:
-        if exclude_origin is not None and (py - ey) ** 2 + (px - ex) ** 2 < exclude_radius ** 2:
-            continue
-        if 0 <= py < h and 0 <= px < w:
-            tensor[py, px] = 255
-            if mask is not None:
+
+    def excluded(py: int, px: int) -> bool:
+        return exclude_origin is not None and (py - ey) ** 2 + (px - ex) ** 2 < exclude_radius ** 2
+
+    if mask is not None:
+        for py, px in points:
+            if not excluded(py, px) and 0 <= py < h and 0 <= px < w:
                 _paint_landslide_mask(mask, py, px, h, w)
+
+    pixels_since_draw = 0
+    next_draw_at = 0
+    burst_remaining = 0
+    for i, (py, px) in enumerate(points):
+        if excluded(py, px):
+            continue
+
+        if burst_remaining > 0:
+            if rng.random() < 0.7 and 0 <= py < h and 0 <= px < w:
+                tensor[py, px] = 255
+            burst_remaining -= 1
+            continue
+
+        if pixels_since_draw >= next_draw_at:
+            if 0 <= py < h and 0 <= px < w:
+                tensor[py, px] = 255
+            burst_remaining = rng.integers(0, 3)
+            ratio = min(i / total_len, 1.0)
+            spacing = ratio ** 2 * max_spacing
+            next_draw_at = max(1, int(spacing + rng.uniform(-spacing * 0.3, spacing * 0.3)))
+            pixels_since_draw = 0
+        else:
+            pixels_since_draw += 1
+
+
+_WALK_TURN_STD = 0.15      # desviación del giro aleatorio por paso (radianes)
+_WALK_MEAN_REVERSION = 0.25  # atracción de vuelta hacia "angle" (0=sin sesgo, 1=vuelve de golpe)
 
 
 def generate_stripe_axis(
@@ -89,29 +137,32 @@ def generate_stripe_axis(
     num_control_points: int = 10,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Genera el eje central de una franja de derrumbe como una polilínea de
-    num_control_points puntos, con un wiggle orgánico leve perpendicular a
-    la dirección principal (random walk suavizado con media móvil).
+    Genera el eje central de una franja de derrumbe como un "paso del
+    borracho" con sesgo: en cada paso el rumbo gira un poco al azar respecto
+    al paso anterior (ruido gaussiano), con una atracción leve de vuelta
+    hacia angle (proceso tipo Ornstein-Uhlenbeck) para que la franja siga
+    avanzando en esa dirección general en vez de deambular sin rumbo.
     Retorna (points (N,2) en [y,x], t (N,) progreso normalizado 0-1).
     """
     oy, ox = start_point
-    t = np.linspace(0.0, 1.0, num_control_points)
-    dist = t * length
+    n = num_control_points
+    step_size = length / (n - 1)
 
-    raw = np.cumsum(rng.uniform(-1.0, 1.0, size=num_control_points))
-    kernel_size = max(3, num_control_points // 3)
-    kernel = np.ones(kernel_size) / kernel_size
-    smoothed = np.convolve(raw, kernel, mode="same")
+    headings = np.empty(n)
+    headings[0] = angle
+    drift = 0.0
+    for i in range(1, n):
+        drift += -_WALK_MEAN_REVERSION * drift + rng.normal(0.0, _WALK_TURN_STD)
+        headings[i] = angle + drift
 
-    max_abs = np.max(np.abs(smoothed))
-    if max_abs > 0:
-        smoothed = smoothed / max_abs * (length * 0.03)
+    points = np.empty((n, 2))
+    points[0] = [oy, ox]
+    for i in range(1, n):
+        py, px = points[i - 1]
+        points[i, 0] = py + step_size * np.sin(headings[i - 1])
+        points[i, 1] = px + step_size * np.cos(headings[i - 1])
 
-    perp_angle = angle + np.pi / 2
-    axis_y = oy + dist * np.sin(angle) + smoothed * np.sin(perp_angle)
-    axis_x = ox + dist * np.cos(angle) + smoothed * np.cos(perp_angle)
-
-    points = np.stack([axis_y, axis_x], axis=1)
+    t = np.linspace(0.0, 1.0, n)
     return points, t
 
 
@@ -155,9 +206,14 @@ def draw_landslide_stripe(
     tangents = tangents / norms[:, None]
     perps = np.stack([-tangents[:, 1], tangents[:, 0]], axis=1)
 
-    # Eje central: una sola línea quebrada (conecta los puntos de control)
+    # Eje central: una sola línea quebrada (conecta los puntos de control),
+    # concatenada en una única polilínea para que el punteado sea continuo
+    # a lo largo de toda la franja (no se reinicia en cada punto de control)
+    axis_points: list[tuple[int, int]] = []
     for i in range(n - 1):
-        _draw_line(tensor, mask, axis[i, 0], axis[i, 1], axis[i + 1, 0], axis[i + 1, 1], exclude_origin, exclude_radius)
+        segment = _line_points(axis[i, 0], axis[i, 1], axis[i + 1, 0], axis[i + 1, 1])
+        axis_points.extend(segment[1:] if i > 0 else segment)
+    _draw_dotted(tensor, mask, axis_points, rng, exclude_origin, exclude_radius)
 
     # Sentido de la franja: un solo lado para TODOS los dientes, apuntando
     # hacia exclude_origin (la explosión). Se calcula desde el punto del eje
@@ -190,7 +246,8 @@ def draw_landslide_stripe(
 
         tooth_len = tooth_len_local * rng.uniform(0.6, 1.0) * (1 - pos * 0.4)
         tip_point = center + perp * stripe_side * tooth_len
-        _draw_line(tensor, mask, center[0], center[1], tip_point[0], tip_point[1], exclude_origin, exclude_radius)
+        tooth_points = _line_points(center[0], center[1], tip_point[0], tip_point[1])
+        _draw_dotted(tensor, mask, tooth_points, rng, exclude_origin, exclude_radius, max_spacing=15.0)
 
         spacing = (3.0 + pos ** 2 * 50.0) * rng.uniform(0.7, 1.3)
         pos += spacing / length
