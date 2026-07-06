@@ -8,10 +8,13 @@ una imagen son aproximadamente paralelas entre sí (comparten una dirección
 general con variación leve por franja), pero cada una arranca en un punto
 aleatorio independiente del canvas. Cada franja es **una sola línea**
 central (con wiggle orgánico, no un canal de 2 bordes/riel) con una textura
-tipo "peine": trazos cortos perpendiculares que salen de la línea hacia UN
-lado al azar por diente (no ambos), como una "T" — más densos y largos
-cerca del punto de inicio de la franja y más dispersos/cortos hacia su
-extremo lejano — mismo esquema de spacing cuadrático que ya usa
+tipo "peine": trazos cortos perpendiculares que salen de la línea, todos
+hacia el MISMO lado dentro de una franja (no alternan al azar diente por
+diente), como una "T". Ese lado se elige una vez por franja, apuntando
+siempre hacia el origen de la explosión (sin importar si la franja queda a
+la izquierda, derecha, arriba o abajo de ella). Los dientes son más densos
+y largos cerca del punto de inicio de la franja y más dispersos/cortos
+hacia su extremo lejano — mismo esquema de spacing cuadrático que ya usa
 trajectories.py para sus puntos, aplicado acá a densidad de dientes en vez
 de puntos sobre una línea.
 
@@ -127,10 +130,14 @@ def draw_landslide_stripe(
     """
     Dibuja una franja de derrumbe: una sola línea central (con wiggle
     orgánico) más una textura de dientes perpendiculares que salen de esa
-    línea hacia un lado al azar, con largo máximo que va de tooth_len_start
-    (cerca de start_point) a tooth_len_end (extremo lejano).
+    línea, todos hacia el MISMO lado (apuntando hacia exclude_origin, ver
+    abajo), con largo máximo que va de tooth_len_start (cerca de start_point)
+    a tooth_len_end (extremo lejano).
     exclude_origin/exclude_radius: zona (típicamente la explosión) sobre la
-    que la franja nunca dibuja, ni en tensor ni en mask.
+    que la franja nunca dibuja, ni en tensor ni en mask. Además, exclude_origin
+    se usa como referencia para el "sentido" de la franja: todos los dientes
+    apuntan hacia ese punto, sin importar de qué lado de la explosión quede
+    la franja (izquierda, derecha, arriba, abajo).
     """
     num_control_points = max(8, int(length / 60))
     axis, t = generate_stripe_axis(start_point, angle, length, rng, num_control_points)
@@ -152,8 +159,21 @@ def draw_landslide_stripe(
     for i in range(n - 1):
         _draw_line(tensor, mask, axis[i, 0], axis[i, 1], axis[i + 1, 0], axis[i + 1, 1], exclude_origin, exclude_radius)
 
-    # Textura "peine": cada diente sale del eje hacia UN lado al azar (no
-    # ambos), como una "T" — el eje queda como una única línea, sin riel.
+    # Sentido de la franja: un solo lado para TODOS los dientes, apuntando
+    # hacia exclude_origin (la explosión). Se calcula desde el punto del eje
+    # más cercano al origen (ahí la perpendicular indica mejor "hacia dónde"
+    # queda la explosión respecto a la franja).
+    if exclude_origin is not None:
+        oy, ox = exclude_origin
+        dists_to_origin = np.sqrt((axis[:, 0] - oy) ** 2 + (axis[:, 1] - ox) ** 2)
+        closest_idx = int(np.argmin(dists_to_origin))
+        to_origin = np.array([oy, ox]) - axis[closest_idx]
+        stripe_side = 1.0 if np.dot(to_origin, perps[closest_idx]) > 0 else -1.0
+    else:
+        stripe_side = 1.0 if rng.random() < 0.5 else -1.0
+
+    # Textura "peine": todos los dientes salen del eje hacia stripe_side (no
+    # ambos lados), como una "T" — el eje queda como una única línea, sin riel.
     pos = 0.0
     while pos < 1.0:
         idx = pos * (n - 1)
@@ -168,9 +188,8 @@ def draw_landslide_stripe(
             perp = perp / perp_norm
         tooth_len_local = tooth_lens[i0] * (1 - frac) + tooth_lens[i1] * frac
 
-        side = 1.0 if rng.random() < 0.5 else -1.0
         tooth_len = tooth_len_local * rng.uniform(0.6, 1.0) * (1 - pos * 0.4)
-        tip_point = center + perp * side * tooth_len
+        tip_point = center + perp * stripe_side * tooth_len
         _draw_line(tensor, mask, center[0], center[1], tip_point[0], tip_point[1], exclude_origin, exclude_radius)
 
         spacing = (3.0 + pos ** 2 * 50.0) * rng.uniform(0.7, 1.3)
