@@ -83,7 +83,7 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
         centers_arr = np.array(centers, dtype=np.float64)
         max_center_dist = np.sqrt(((centers_arr - origin) ** 2).sum(axis=1)).max()
         exclusion_radius = max_center_dist + smoke_radius * 1.3 + 10
-        num_stripes = rng.integers(3, 7)
+        num_stripes = int(np.clip(round(rng.normal(4.5, 1.5)), 1, 8))
         draw_landslides(tensor, num_stripes, np.radians(15), rng, mask, origin, exclusion_radius)
 
     # Binarización: valores >= 128 pasan a blanco (255), el resto a negro (0)

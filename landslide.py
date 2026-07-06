@@ -9,22 +9,26 @@ general con variación leve por franja), pero cada una arranca en un punto
 aleatorio independiente del canvas. Cada franja es **una sola línea**
 central, generada como un "paso del borracho" con sesgo (random walk en el
 rumbo, con atracción leve de vuelta hacia la dirección original — ver
-generate_stripe_axis), no una recta ni un canal de 2 bordes/riel, con una textura
-tipo "peine": trazos cortos perpendiculares que salen de la línea, todos
-hacia el MISMO lado dentro de una franja (no alternan al azar diente por
-diente), como una "T". Ese lado se elige una vez por franja, apuntando
-siempre hacia el origen de la explosión (sin importar si la franja queda a
-la izquierda, derecha, arriba o abajo de ella). Los dientes son más densos
-y largos cerca del punto de inicio de la franja y más dispersos/cortos
-hacia su extremo lejano — mismo esquema de spacing cuadrático que ya usa
-trajectories.py para sus puntos, aplicado acá a densidad de dientes en vez
-de puntos sobre una línea.
+generate_stripe_axis), no una recta ni un canal de 2 bordes/riel.
 
-Tanto el eje como los dientes se dibujan punteados en el B/W (spacing
-cuadrático + ráfagas de 1-3 píxeles, mismo patrón que trajectories.py),
-mientras que la máscara pinta el trazo completo — igual asimetría mask/tensor
-que ya usan las trayectorias (el B/W simula visibilidad parcial, la máscara
-representa la clase real completa).
+A lo largo de esa línea, a intervalos (spacing cuadrático: denso cerca del
+inicio de la franja, disperso hacia el extremo lejano — mismo esquema que
+usa trajectories.py para sus puntos), hay "puntos de caída": desde cada uno
+sale una mini-trayectoria hacia el MISMO lado dentro de una franja (no
+alternan al azar punto por punto), apuntando siempre hacia el origen de la
+explosión (sin importar si la franja queda a la izquierda, derecha, arriba o
+abajo de ella). Cada punto de caída sortea su propio alfa (gaussiano, media
+0.5, ver _ALPHA_MEAN/_ALPHA_STD): si alfa<0.5 la mini-trayectoria es una
+recta, si alfa>=0.5 es una mini-parábola (misma lógica de curvatura que
+draw_parabolic_trajectory en trajectories.py, en miniatura). El largo de
+cada mini-trayectoria es más grande cerca del punto de inicio de la franja y
+más chico hacia su extremo lejano.
+
+Tanto el eje como las mini-trayectorias se dibujan punteados en el B/W
+(spacing cuadrático + ráfagas de 1-3 píxeles, mismo patrón que
+trajectories.py), mientras que la máscara pinta el trazo completo — igual
+asimetría mask/tensor que ya usan las trayectorias (el B/W simula
+visibilidad parcial, la máscara representa la clase real completa).
 
 Todas las funciones que aceptan mask pintan clase 3 (derrumbe) solo sobre
 píxeles de fondo (clase 0). Esto implementa la prioridad
@@ -41,8 +45,8 @@ Funciones:
     - generate_stripe_axis(...): genera el eje central de una franja como un
       random walk sesgado (paso del borracho): suave, ni recto ni errático.
     - draw_landslide_stripe(...): dibuja una franja completa (1 línea central
-      + textura de dientes perpendiculares), con largo de diente que se
-      angosta desde su punto de inicio hacia el extremo lejano.
+      + puntos de caída con mini-rectas/parábolas según alfa), con largo que
+      se angosta desde su punto de inicio hacia el extremo lejano.
     - draw_landslides(...): genera N franjas paralelas con puntos de inicio
       independientes, distribuidos en cualquier parte del canvas.
 """
@@ -128,6 +132,34 @@ def _draw_dotted(
 _WALK_TURN_STD = 0.15      # desviación del giro aleatorio por paso (radianes)
 _WALK_MEAN_REVERSION = 0.25  # atracción de vuelta hacia "angle" (0=sin sesgo, 1=vuelve de golpe)
 
+_ALPHA_MEAN = 0.5   # media de la gaussiana de alfa (recta si <0.5, parábola si >=0.5)
+_ALPHA_STD = 0.25   # desvío de esa gaussiana
+
+
+def _parabola_points(
+    y0: float, x0: float, angle: float, length: float, curvature: float, num_steps: int
+) -> list[tuple[int, int]]:
+    """
+    Genera los píxeles de una mini-parábola: avance lineal en angle + offset
+    cuadrático (curvature * t²) perpendicular a esa dirección. Mismo
+    principio que draw_parabolic_trajectory en trajectories.py, en miniatura.
+    """
+    cos_a, sin_a = np.cos(angle), np.sin(angle)
+    perp_angle = angle + np.pi / 2
+    cos_p, sin_p = np.cos(perp_angle), np.sin(perp_angle)
+
+    points: list[tuple[int, int]] = []
+    prev_y, prev_x = y0, x0
+    for i in range(1, num_steps + 1):
+        t = i / num_steps * length
+        offset = curvature * t * t
+        py = y0 + t * sin_a + offset * sin_p
+        px = x0 + t * cos_a + offset * cos_p
+        segment = _line_points(prev_y, prev_x, py, px)
+        points.extend(segment[1:] if points else segment)
+        prev_y, prev_x = py, px
+    return points
+
 
 def generate_stripe_axis(
     start_point: tuple[float, float],
@@ -180,15 +212,16 @@ def draw_landslide_stripe(
 ) -> None:
     """
     Dibuja una franja de derrumbe: una sola línea central (con wiggle
-    orgánico) más una textura de dientes perpendiculares que salen de esa
-    línea, todos hacia el MISMO lado (apuntando hacia exclude_origin, ver
-    abajo), con largo máximo que va de tooth_len_start (cerca de start_point)
-    a tooth_len_end (extremo lejano).
+    orgánico) más puntos de caída a lo largo de ella, cada uno con una
+    mini-recta o mini-parábola (según su propio alfa gaussiano) hacia el
+    MISMO lado (apuntando hacia exclude_origin, ver abajo), con largo máximo
+    que va de tooth_len_start (cerca de start_point) a tooth_len_end
+    (extremo lejano).
     exclude_origin/exclude_radius: zona (típicamente la explosión) sobre la
     que la franja nunca dibuja, ni en tensor ni en mask. Además, exclude_origin
-    se usa como referencia para el "sentido" de la franja: todos los dientes
-    apuntan hacia ese punto, sin importar de qué lado de la explosión quede
-    la franja (izquierda, derecha, arriba, abajo).
+    se usa como referencia para el "sentido" de la franja: todas las
+    mini-trayectorias apuntan hacia ese punto, sin importar de qué lado de la
+    explosión quede la franja (izquierda, derecha, arriba, abajo).
     """
     num_control_points = max(8, int(length / 60))
     axis, t = generate_stripe_axis(start_point, angle, length, rng, num_control_points)
@@ -228,8 +261,9 @@ def draw_landslide_stripe(
     else:
         stripe_side = 1.0 if rng.random() < 0.5 else -1.0
 
-    # Textura "peine": todos los dientes salen del eje hacia stripe_side (no
-    # ambos lados), como una "T" — el eje queda como una única línea, sin riel.
+    # Puntos de caída: cada uno tira su propio alfa (gaussiano, media 0.5) para
+    # decidir si "cae" una mini-recta (alfa<0.5) o una mini-parábola (alfa>=0.5)
+    # desde el eje hacia stripe_side, apuntando siempre hacia la explosión.
     pos = 0.0
     while pos < 1.0:
         idx = pos * (n - 1)
@@ -244,10 +278,19 @@ def draw_landslide_stripe(
             perp = perp / perp_norm
         tooth_len_local = tooth_lens[i0] * (1 - frac) + tooth_lens[i1] * frac
 
-        tooth_len = tooth_len_local * rng.uniform(0.6, 1.0) * (1 - pos * 0.4)
-        tip_point = center + perp * stripe_side * tooth_len
-        tooth_points = _line_points(center[0], center[1], tip_point[0], tip_point[1])
-        _draw_dotted(tensor, mask, tooth_points, rng, exclude_origin, exclude_radius, max_spacing=15.0)
+        drop_len = tooth_len_local * rng.uniform(0.6, 1.0) * (1 - pos * 0.4)
+        drop_angle = np.arctan2(perp[0] * stripe_side, perp[1] * stripe_side)
+
+        alpha = np.clip(rng.normal(_ALPHA_MEAN, _ALPHA_STD), 0.0, 1.0)
+        if alpha < 0.5:
+            tip_point = center + perp * stripe_side * drop_len
+            drop_points = _line_points(center[0], center[1], tip_point[0], tip_point[1])
+        else:
+            curvature = rng.uniform(0.001, 0.006) * (1 if rng.random() < 0.5 else -1)
+            num_steps = max(4, int(drop_len / 8))
+            drop_points = _parabola_points(center[0], center[1], drop_angle, drop_len, curvature, num_steps)
+
+        _draw_dotted(tensor, mask, drop_points, rng, exclude_origin, exclude_radius, max_spacing=15.0)
 
         spacing = (3.0 + pos ** 2 * 50.0) * rng.uniform(0.7, 1.3)
         pos += spacing / length
