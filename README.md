@@ -6,11 +6,12 @@ Generador sintético de imágenes de explosiones, diseñado para crear datasets 
 
 Pares de imágenes PNG de 1280x720 generados simultáneamente en un solo pase:
 
-- **Entrada (B/W)**: imagen binarizada en blanco y negro con trayectorias punteadas, humo con textura y manchas.
-- **Salida (RGB)**: máscara de segmentación con los mismos elementos coloreados por clase:
+- **Entrada (B/W)**: imagen binarizada en blanco y negro con trayectorias punteadas, humo con textura y manchas, y franjas de derrumbe (cuando ocurren).
+- **Salida (paleta)**: máscara de segmentación en PNG modo paleta ("P") — cada píxel es un índice de clase (0-3), con paleta embebida solo para visualización:
   - **Rojo** = fondo
   - **Verde** = humo
   - **Azul** = trayectorias (líneas continuas, sin gaps)
+  - **Amarillo** = derrumbe (franjas de desprendimiento de tierra/rocas)
 
 ## Estructura del proyecto
 
@@ -19,9 +20,10 @@ main.py               → Punto de entrada. Orquesta el pipeline y genera ambas 
 generate_dataset.py   → Generación masiva (10k pares) con multiprocessing.
 canvas.py             → Lienzo, cuadrilátero de impacto, centros de fragmentos.
 smoke.py              → Humo con zonas concéntricas + manchas sustractivas.
+landslide.py           → Franjas de derrumbe: bordes quebrados + textura de dientes perpendiculares.
 trajectories.py       → Trayectorias rectas y parabólicas con spacing cuadrático + ráfagas.
 perlin_noise.py       → Implementación de Perlin noise 2D con octavas.
-export.py             → Conversión de tensor a imagen PNG (B/W y RGB).
+export.py             → Conversión de tensor a imagen PNG (B/W) y máscara a PNG paleta.
 ```
 
 ## Pipeline de generación
@@ -37,7 +39,8 @@ Ambas salidas (B/W y máscara RGB) se generan en el mismo pase, compartiendo tod
 7. Dibujar trayectorias rectas (1-15) y parabólicas (1-15):
    - En B/W: punteadas con spacing cuadrático + ráfagas de 1-5 píxeles
    - En máscara: líneas continuas completas → azul
-8. Binarizar B/W: píxeles ≥ 128 → blanco, resto → negro
+8. Dibujar franjas de derrumbe (~40% de las imágenes, 3-6 franjas): bordes quebrados + textura de dientes perpendiculares → amarillo en la máscara, excluyendo un radio alrededor de la explosión
+9. Binarizar B/W: píxeles ≥ 128 → blanco, resto → negro
 
 ## Uso
 
@@ -86,4 +89,4 @@ Se usan tres capas de Perlin noise:
 El dron "mira" hacia el centro del lienzo. Este ángulo modula la curvatura de las trayectorias parabólicas: trayectorias perpendiculares al dron curvan más (efecto de perspectiva), las paralelas casi nada.
 
 ### Máscara de segmentación
-La máscara se construye durante el mismo pase de generación usando un tensor de etiquetas (0=fondo, 1=humo, 2=trayectoria). La prioridad de clases es **humo > trayectoria > fondo**: si una trayectoria cruza el humo, ese píxel se mantiene como humo (verde). Las trayectorias solo se marcan sobre el fondo. Tras la binarización del B/W, se sincronizan los píxeles de humo que no sobrevivieron el umbral (brillo < 128) reseteándolos a fondo en la máscara. Al exportar, las etiquetas se convierten a RGB (Rojo/Verde/Azul).
+La máscara se construye durante el mismo pase de generación usando un tensor de etiquetas (0=fondo, 1=humo, 2=trayectoria, 3=derrumbe). La prioridad de clases es **humo > trayectoria > derrumbe > fondo**: cada clase de menor prioridad solo se marca sobre píxeles que todavía son fondo, así que nunca pisa a una clase de mayor prioridad ya dibujada. Además, el derrumbe nunca dibuja (ni en la imagen B/W ni en la máscara) dentro de un radio de exclusión alrededor del origen de la explosión, para que nunca pase por encima del humo aunque este tenga huecos (manchas sustractivas). Tras la binarización del B/W, se sincronizan los píxeles de humo que no sobrevivieron el umbral (brillo < 128) reseteándolos a fondo en la máscara. Al exportar, las etiquetas se guardan como PNG modo paleta ("P"): cada píxel es el índice de clase, y la paleta (Rojo/Verde/Azul/Amarillo) es solo metadata para visualización.

@@ -3,11 +3,12 @@ main.py - Punto de entrada del generador de dataset sintético de explosiones.
 
 Orquesta el pipeline completo de generación en un solo pase: crea el lienzo,
 genera la zona de impacto (cuadrilátero), distribuye centros de metralla,
-dibuja el humo con textura Perlin, traza trayectorias rectas y parabólicas,
-y produce simultáneamente dos salidas:
+dibuja el humo con textura Perlin, traza franjas de derrumbe (opcional) y
+trayectorias rectas y parabólicas, y produce simultáneamente dos salidas:
     - Imagen B/W (entrada del dataset): binarizada, con trayectorias punteadas.
-    - Máscara RGB (salida del dataset): segmentación por colores.
-      Rojo=fondo, Verde=humo, Azul=trayectorias (continuas).
+    - Máscara en PNG modo paleta (salida del dataset): segmentación por
+      índice de clase, con paleta embebida para visualización por colores.
+      Rojo=fondo, Verde=humo, Azul=trayectorias (continuas), Amarillo=derrumbe.
 
 Funciones:
     - generate_explosion(height, width, rng): Genera la explosión completa.
@@ -25,6 +26,7 @@ from canvas import (
     distribute_centers_in_quadrilateral,
 )
 from smoke import draw_smoke
+from landslide import draw_landslides
 from trajectories import draw_trajectories
 from export import tensor_to_image, mask_to_rgb
 
@@ -70,6 +72,19 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     num_straight = rng.integers(1, 16)
     num_parabolic = rng.integers(1, 16)
     draw_trajectories(tensor, centers, origin, num_straight, num_parabolic, drone_angle, rng, mask)
+
+    # Derrumbe: franjas de desprendimiento independientes de la explosión,
+    # aproximadamente paralelas entre sí, con puntos de inicio propios
+    # distribuidos en cualquier parte del lienzo. Ocurre en ~40% de las imágenes.
+    # Se dibuja al final para que respete la prioridad humo > trayectoria >
+    # derrumbe > fondo, y nunca pasa por encima de la zona de la explosión
+    # (exclusion_radius cubre el centro + los fragmentos + el humo).
+    if rng.random() < 0.4:
+        centers_arr = np.array(centers, dtype=np.float64)
+        max_center_dist = np.sqrt(((centers_arr - origin) ** 2).sum(axis=1)).max()
+        exclusion_radius = max_center_dist + smoke_radius * 1.3 + 10
+        num_stripes = rng.integers(3, 7)
+        draw_landslides(tensor, num_stripes, np.radians(15), rng, mask, origin, exclusion_radius)
 
     # Binarización: valores >= 128 pasan a blanco (255), el resto a negro (0)
     tensor = np.where(tensor >= 128, 255, 0).astype(np.uint8)

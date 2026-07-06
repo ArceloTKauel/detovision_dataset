@@ -1,13 +1,13 @@
 #
 # Generación masiva del dataset sintético.
 #
-# Genera N pares de imágenes (entrada B/W + máscara RGB) usando multiprocessing
-# para aprovechar todos los cores disponibles de la CPU.
+# Genera N pares de imágenes (entrada B/W + máscara en PNG modo paleta) usando
+# multiprocessing para aprovechar todos los cores disponibles de la CPU.
 #
 # Estructura de salida:
 #     dataset/
 #         inputs/     → imágenes B/W binarizadas (entrada del modelo)
-#         targets/    → máscaras RGB de segmentación (salida esperada)
+#         targets/    → máscaras de segmentación en PNG modo paleta (salida esperada)
 
 import os
 from multiprocessing import Pool
