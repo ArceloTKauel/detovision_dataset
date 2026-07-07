@@ -30,8 +30,8 @@ from landslide import draw_landslides
 from trajectories import draw_trajectories
 from export import tensor_to_image, mask_to_rgb
 
-HEIGHT = 320
-WIDTH = 480
+HEIGHT = 512
+WIDTH = 768
 DRAW_LANDSLIDES = False
 
 
