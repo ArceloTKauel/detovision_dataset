@@ -30,8 +30,9 @@ from landslide import draw_landslides
 from trajectories import draw_trajectories
 from export import tensor_to_image, mask_to_rgb
 
-HEIGHT = 1280
-WIDTH = 1920
+HEIGHT = 320
+WIDTH = 480
+DRAW_LANDSLIDES = False
 
 
 def generate_explosion(height: int, width: int, rng: np.random.Generator | None = None) -> tuple[np.ndarray, np.ndarray]:
@@ -79,7 +80,8 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     # Se dibuja al final para que respete la prioridad humo > trayectoria >
     # derrumbe > fondo, y nunca pasa por encima de la zona de la explosión
     # (exclusion_radius cubre el centro + los fragmentos + el humo).
-    if rng.random() < 0.4:
+    # Desactivado temporalmente: DRAW_LANDSLIDES = False deshabilita la clase 3.
+    if DRAW_LANDSLIDES and rng.random() < 0.4:
         centers_arr = np.array(centers, dtype=np.float64)
         max_center_dist = np.sqrt(((centers_arr - origin) ** 2).sum(axis=1)).max()
         exclusion_radius = max_center_dist + smoke_radius * 1.3 + 10
