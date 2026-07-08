@@ -18,14 +18,15 @@ Funciones:
     - bresenham(y0, x0, y1, x1): Algoritmo de Bresenham para rasterizar una
       línea entre dos puntos. Retorna lista de coordenadas (y, x).
     - draw_trajectory(...): Dibuja una trayectoria recta punteada con ráfagas.
-    - draw_parabolic_trajectory(...): Dibuja una trayectoria curva punteada
-      con ráfagas. La curva se calcula como desplazamiento cuadrático
-      perpendicular al ángulo.
+    - draw_returning_parabola(...): Dibuja una trayectoria parabólica punteada
+      que parte de un centro, se aleja hacia un punto de control (curva de
+      Bezier cuadrática, pudiendo salir del lienzo) y vuelve a converger
+      cerca del origen de la explosión, simulando metralla que cae de
+      regreso al punto de impacto.
     - draw_straight_trajectories(...): Genera N trayectorias rectas desde
       centros aleatorios, con longitud mínima = ancho del humo en esa dirección.
-    - draw_parabolic_trajectories(...): Genera N trayectorias parabólicas.
-      La curvatura se modula por el ángulo relativo al dron: trayectorias
-      perpendiculares al dron curvan más, las paralelas casi nada.
+    - draw_parabolic_trajectories(...): Genera N trayectorias parabólicas de
+      ida y vuelta (draw_returning_parabola) desde centros aleatorios.
     - draw_trajectories(...): Función principal que dibuja ambos tipos.
 """
 
@@ -158,12 +159,9 @@ def draw_trajectory(
                 _paint_traj_mask(mask, py, px, h, w)
 
 
-def draw_parabolic_trajectory(
+def draw_returning_parabola(
     tensor: np.ndarray,
-    center: tuple[int, int],
-    angle: float,
-    length: float,
-    curvature: float,
+    start: tuple[float, float],
     origin: tuple[int, int],
     rng: np.random.Generator,
     mask: np.ndarray | None = None,
@@ -171,30 +169,40 @@ def draw_parabolic_trajectory(
     erase_frac_range: tuple[float, float] = (0.01, 0.05),
 ) -> None:
     """
-    Dibuja una trayectoria parabólica punteada.
-    La curva se genera como: posición = avance lineal + offset cuadrático perpendicular.
-    El offset perpendicular es curvature * t², donde t es la distancia recorrida.
+    Dibuja una trayectoria en forma de lazo/óvalo que parte de `start`
+    (un centro dentro de la nube de humo), da una vuelta completa en un
+    arco amplio y cierra exactamente sobre `start`, simulando metralla que
+    describe un arco amplio y cae de regreso al mismo punto de impacto.
+    Se rasteriza como elipse completa: semi-eje mayor `a` (alcance),
+    semi-eje menor `b` (ancho del lazo).
     Usa Bresenham para interpolar saltos entre pasos consecutivos.
     erase_prob: probabilidad por oportunidad de dibujo de activar un borrado.
     erase_frac_range: (min, max) fracción del largo total a borrar por sección.
     """
     h, w = tensor.shape
-    cy, cx = center
     oy, ox = origin
+    sy, sx = start
+    diagonal = np.hypot(h, w)
 
-    # Ángulo perpendicular para el desplazamiento curvo
-    perp_angle = angle + np.pi / 2
-    cos_a = np.cos(angle)
-    sin_a = np.sin(angle)
-    cos_p = np.cos(perp_angle)
-    sin_p = np.sin(perp_angle)
+    theta = rng.uniform(0, 2 * np.pi)
+    a = rng.uniform(diagonal * 0.15, diagonal * 0.75)  # semi-eje mayor: alcance del lazo
+    b = a * rng.uniform(0.08, 0.35)  # semi-eje menor: ancho del lazo
+    side = 1 if rng.random() < 0.5 else -1
 
-    num_steps = int(length)
-    if num_steps < 2:
-        return
+    # Eje mayor (u) en dirección theta, eje menor (v) perpendicular
+    uy, ux = np.sin(theta), np.cos(theta)
+    vy, vx = side * np.cos(theta), -side * np.sin(theta)
 
+    # Centro de la elipse: start queda en el punto t=pi de la parametrización
+    cy = sy + a * uy
+    cx = sx + a * ux
+
+    sweep = 2 * np.pi  # vuelta completa: el lazo siempre cierra exactamente sobre `start`
+    direction = 1 if rng.random() < 0.5 else -1
+
+    num_steps = max(int(a * sweep), 2)
     total_len = max(num_steps, 1)
-    prev_py, prev_px = cy, cx
+    prev_py, prev_px = int(round(sy)), int(round(sx))
     pixels_since_draw = 0
     next_draw_at = 0
     burst_remaining = 0
@@ -204,20 +212,24 @@ def draw_parabolic_trajectory(
     all_points = []
     max_spacing = 50
 
-    for i in range(num_steps):
-        t = i / num_steps * length
-        offset = curvature * t * t
+    max_dist = 2 * a if a > 0 else 1  # distancia del punto más lejano del lazo a `start`
 
-        py = int(round(cy + t * sin_a + offset * sin_p))
-        px = int(round(cx + t * cos_a + offset * cos_p))
+    for i in range(num_steps + 1):
+        progress = i / num_steps
+        t = np.pi + direction * progress * sweep
+        cos_t = np.cos(t)
+        sin_t = np.sin(t)
+
+        py = int(round(cy + a * cos_t * uy + b * sin_t * vy))
+        px = int(round(cx + a * cos_t * ux + b * sin_t * vx))
 
         if i > 0 and (abs(py - prev_py) > 1 or abs(px - prev_px) > 1):
             segment = bresenham(prev_py, prev_px, py, px)
         else:
             segment = [(py, px)]
 
-        for sy, sx in segment:
-            all_points.append((sy, sx))
+        for spy, spx in segment:
+            all_points.append((spy, spx))
 
             if erase_remaining > 0:
                 erase_remaining -= 1
@@ -230,27 +242,26 @@ def draw_parabolic_trajectory(
 
             if burst_remaining > 0:
                 if rng.random() < 0.7:
-                    if 0 <= sy < h and 0 <= sx < w:
-                        tensor[sy, sx] = 255
+                    if 0 <= spy < h and 0 <= spx < w:
+                        tensor[spy, spx] = 255
                         pixels_drawn += 1
                 burst_remaining -= 1
                 continue
 
             if pixels_since_draw >= next_draw_at:
                 if grace_remaining == 0 and rng.random() < erase_prob:
-                    frac = rng.uniform(erase_frac_range[0], erase_frac_range[1])
-                    erase_remaining = max(1, int(frac * total_len))
+                    erase_frac = rng.uniform(erase_frac_range[0], erase_frac_range[1])
+                    erase_remaining = max(1, int(erase_frac * total_len))
                     pixels_since_draw = 0
                     next_draw_at = 1
                 else:
-                    if 0 <= sy < h and 0 <= sx < w:
-                        tensor[sy, sx] = 255
+                    if 0 <= spy < h and 0 <= spx < w:
+                        tensor[spy, spx] = 255
                         pixels_drawn += 1
 
                     burst_remaining = rng.integers(0, 3)
 
-                    dist_from_origin = np.sqrt((sy - oy) ** 2 + (sx - ox) ** 2)
-                    max_dist = length if length > 0 else 1
+                    dist_from_origin = np.sqrt((spy - oy) ** 2 + (spx - ox) ** 2)
                     ratio = min(dist_from_origin / max_dist, 1.0)
                     spacing = ratio ** 2 * max_spacing
                     next_draw_at = max(1, int(spacing + rng.uniform(-spacing * 0.3, spacing * 0.3)))
@@ -262,9 +273,9 @@ def draw_parabolic_trajectory(
 
     # Mask: solo si la trayectoria tiene al menos un píxel visible en el tensor
     if mask is not None and pixels_drawn > 0:
-        for sy, sx in all_points:
-            if 0 <= sy < h and 0 <= sx < w:
-                _paint_traj_mask(mask, sy, sx, h, w)
+        for spy, spx in all_points:
+            if 0 <= spy < h and 0 <= spx < w:
+                _paint_traj_mask(mask, spy, spx, h, w)
 
 
 def draw_straight_trajectories(
@@ -304,35 +315,18 @@ def draw_parabolic_trajectories(
     centers: list[tuple[int, int]],
     origin: tuple[int, int],
     num_trajectories: int,
-    drone_angle: float,
     rng: np.random.Generator,
     mask: np.ndarray | None = None,
 ) -> None:
     """
-    Genera múltiples trayectorias parabólicas. La curvatura se modula por
-    el ángulo relativo al dron: sin(angle_diff) hace que trayectorias
-    perpendiculares al dron curven más, y las paralelas casi nada.
+    Genera múltiples trayectorias en forma de lazo/óvalo: cada una parte de
+    un centro cercano a la explosión, describe un arco amplio (semi-eje mayor
+    y menor aleatorios, pudiendo salir del lienzo) y vuelve a converger cerca
+    de su punto de partida, simulando metralla que cae de regreso al punto
+    de impacto.
     """
-    h, w = tensor.shape
-    diagonal = np.sqrt(h ** 2 + w ** 2)
-
     for _ in range(num_trajectories):
-        center = centers[rng.integers(0, len(centers))]
-        angle = rng.uniform(0, 2 * np.pi)
-
-        smoke_width = measure_smoke_width(tensor, origin, angle)
-        min_length = max(10, smoke_width)
-        length = rng.uniform(min_length, diagonal)
-
-        # Curvatura base aleatoria, con mínimo garantizado
-        curvature = rng.uniform(-0.005, 0.005)
-        if abs(curvature) < 0.001:
-            curvature = 0.001 * (1 if rng.random() > 0.5 else -1)
-
-        # Modular curvatura según ángulo relativo al dron
-        angle_diff = angle - drone_angle
-        curvature_factor = abs(np.sin(angle_diff))
-        curvature *= curvature_factor
+        start = centers[rng.integers(0, len(centers))]
 
         if rng.random() < 0.5:
             erase_prob = rng.uniform(0.0, 0.20)
@@ -341,7 +335,7 @@ def draw_parabolic_trajectories(
         else:
             erase_prob = 0.0
             frac_lo, frac_hi = 0.0, 0.0
-        draw_parabolic_trajectory(tensor, center, angle, length, curvature, origin, rng, mask, erase_prob, (frac_lo, frac_hi))
+        draw_returning_parabola(tensor, start, origin, rng, mask, erase_prob, (frac_lo, frac_hi))
 
 
 def draw_trajectories(
@@ -350,10 +344,9 @@ def draw_trajectories(
     origin: tuple[int, int],
     num_straight: int,
     num_parabolic: int,
-    drone_angle: float,
     rng: np.random.Generator,
     mask: np.ndarray | None = None,
 ) -> None:
     """Punto de entrada: dibuja trayectorias rectas y parabólicas."""
     draw_straight_trajectories(tensor, centers, origin, num_straight, rng, mask)
-    draw_parabolic_trajectories(tensor, centers, origin, num_parabolic, drone_angle, rng, mask)
+    draw_parabolic_trajectories(tensor, centers, origin, num_parabolic, rng, mask)

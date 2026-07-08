@@ -64,15 +64,10 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     smoke_radius = base_length * rng.uniform(0.15, 0.3)
     draw_smoke(tensor, centers, smoke_radius, rng, mask)
 
-    # Ángulo del dron: apunta hacia el centro del lienzo con perturbación aleatoria.
-    # Influye en la curvatura de las trayectorias parabólicas.
-    drone_angle = np.arctan2(height / 2 - origin[0], width / 2 - origin[1])
-    drone_angle += rng.uniform(-np.pi / 6, np.pi / 6)
-
-    # Trayectorias de metralla (rectas + parabólicas)
+    # Trayectorias de metralla (rectas + parabólicas de ida y vuelta)
     num_straight = rng.integers(1, 16)
     num_parabolic = rng.integers(1, 16)
-    draw_trajectories(tensor, centers, origin, num_straight, num_parabolic, drone_angle, rng, mask)
+    draw_trajectories(tensor, centers, origin, num_straight, num_parabolic, rng, mask)
 
     # Derrumbe: franjas de desprendimiento independientes de la explosión,
     # aproximadamente paralelas entre sí, con puntos de inicio propios
