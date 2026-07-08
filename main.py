@@ -65,8 +65,8 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     draw_smoke(tensor, centers, smoke_radius, rng, mask)
 
     # Trayectorias de metralla (rectas + parabólicas de ida y vuelta)
-    num_straight = rng.integers(1, 16)
-    num_parabolic = rng.integers(1, 16)
+    num_straight = rng.integers(15, 30)
+    num_parabolic = rng.integers(15, 30)
     draw_trajectories(tensor, centers, origin, num_straight, num_parabolic, rng, mask)
 
     # Derrumbe: franjas de desprendimiento independientes de la explosión,
