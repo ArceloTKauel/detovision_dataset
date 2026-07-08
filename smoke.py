@@ -137,7 +137,7 @@ def draw_smoke(
 
     candidate_coords = np.argwhere(candidate_mask)
     if len(candidate_coords) > 0:
-        num_polys = min(len(candidate_coords), rng.integers(8, 25))
+        num_polys = min(len(candidate_coords), rng.integers(15, 45))
         seed_indices = rng.choice(len(candidate_coords), size=num_polys, replace=False)
         seeds = candidate_coords[seed_indices]
 
@@ -152,7 +152,7 @@ def draw_smoke(
             core_factor = float(np.clip(dist / (core_radius * 2), 0.2, 1.0))
 
             # Polígono irregular: vértices a ángulos ordenados con radio variable
-            num_verts = rng.integers(4, 8)
+            num_verts = rng.integers(4, 14)
             angles = np.sort(rng.uniform(0, 2 * np.pi, size=num_verts))
             base_r = smoke_radius * rng.uniform(0.1, 0.3) * core_factor
 
