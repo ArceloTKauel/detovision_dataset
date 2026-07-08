@@ -34,12 +34,12 @@ import numpy as np
 
 from smoke import measure_smoke_width
 
-_HW = 1  # half-width: trayectorias de 3 píxeles (2*_HW+1)
+_MASK_OFFSETS = (-1, 0)  # trayectorias de 2 píxeles de grosor en la máscara
 
 
 def _paint_traj_mask(mask: np.ndarray, py: int, px: int, h: int, w: int) -> None:
-    for dy in range(-_HW, _HW + 1):
-        for dx in range(-_HW, _HW + 1):
+    for dy in _MASK_OFFSETS:
+        for dx in _MASK_OFFSETS:
             ny, nx = py + dy, px + dx
             if 0 <= ny < h and 0 <= nx < w and mask[ny, nx] == 0:
                 mask[ny, nx] = 2

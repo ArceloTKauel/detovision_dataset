@@ -55,12 +55,12 @@ import numpy as np
 
 from trajectories import bresenham
 
-_HW = 1  # half-width: mismo grosor que las trayectorias (3x3 px)
+_MASK_OFFSETS = (-1, 0)  # mismo grosor que las trayectorias (2 píxeles)
 
 
 def _paint_landslide_mask(mask: np.ndarray, py: int, px: int, h: int, w: int) -> None:
-    for dy in range(-_HW, _HW + 1):
-        for dx in range(-_HW, _HW + 1):
+    for dy in _MASK_OFFSETS:
+        for dx in _MASK_OFFSETS:
             ny, nx = py + dy, px + dx
             if 0 <= ny < h and 0 <= nx < w and mask[ny, nx] == 0:
                 mask[ny, nx] = 3
