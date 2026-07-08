@@ -18,15 +18,15 @@ Funciones:
     - bresenham(y0, x0, y1, x1): Algoritmo de Bresenham para rasterizar una
       línea entre dos puntos. Retorna lista de coordenadas (y, x).
     - draw_trajectory(...): Dibuja una trayectoria recta punteada con ráfagas.
-    - draw_returning_parabola(...): Dibuja una trayectoria parabólica punteada
-      que parte de un centro, se aleja hacia un punto de control (curva de
-      Bezier cuadrática, pudiendo salir del lienzo) y vuelve a converger
-      cerca del origen de la explosión, simulando metralla que cae de
-      regreso al punto de impacto.
+    - draw_returning_parabola(...): Dibuja una trayectoria punteada en forma
+      de lazo/óvalo que parte de un centro (dentro de la nube de humo),
+      describe una elipse completa (semi-eje mayor = alcance, pudiendo salir
+      del lienzo) y cierra exactamente sobre su punto de partida, simulando
+      metralla que cae de regreso al punto de impacto.
     - draw_straight_trajectories(...): Genera N trayectorias rectas desde
       centros aleatorios, con longitud mínima = ancho del humo en esa dirección.
-    - draw_parabolic_trajectories(...): Genera N trayectorias parabólicas de
-      ida y vuelta (draw_returning_parabola) desde centros aleatorios.
+    - draw_parabolic_trajectories(...): Genera N trayectorias en lazo
+      (draw_returning_parabola) desde centros aleatorios.
     - draw_trajectories(...): Función principal que dibuja ambos tipos.
 """
 
@@ -320,9 +320,9 @@ def draw_parabolic_trajectories(
 ) -> None:
     """
     Genera múltiples trayectorias en forma de lazo/óvalo: cada una parte de
-    un centro cercano a la explosión, describe un arco amplio (semi-eje mayor
-    y menor aleatorios, pudiendo salir del lienzo) y vuelve a converger cerca
-    de su punto de partida, simulando metralla que cae de regreso al punto
+    un centro cercano a la explosión, describe una elipse completa (semi-eje
+    mayor y menor aleatorios, pudiendo salir del lienzo) y cierra exactamente
+    sobre su punto de partida, simulando metralla que cae de regreso al punto
     de impacto.
     """
     for _ in range(num_trajectories):

@@ -19,10 +19,10 @@ alternan al azar punto por punto), apuntando siempre hacia el origen de la
 explosión (sin importar si la franja queda a la izquierda, derecha, arriba o
 abajo de ella). Cada punto de caída sortea su propio alfa (gaussiano, media
 0.5, ver _ALPHA_MEAN/_ALPHA_STD): si alfa<0.5 la mini-trayectoria es una
-recta, si alfa>=0.5 es una mini-parábola (misma lógica de curvatura que
-draw_parabolic_trajectory en trajectories.py, en miniatura). El largo de
-cada mini-trayectoria es más grande cerca del punto de inicio de la franja y
-más chico hacia su extremo lejano.
+recta, si alfa>=0.5 es una mini-parábola con offset cuadrático perpendicular
+al ángulo (ver _parabola_points, lógica autocontenida en este módulo). El
+largo de cada mini-trayectoria es más grande cerca del punto de inicio de la
+franja y más chico hacia su extremo lejano.
 
 Tanto el eje como las mini-trayectorias se dibujan punteados en el B/W
 (spacing cuadrático + ráfagas de 1-3 píxeles, mismo patrón que
@@ -141,8 +141,7 @@ def _parabola_points(
 ) -> list[tuple[int, int]]:
     """
     Genera los píxeles de una mini-parábola: avance lineal en angle + offset
-    cuadrático (curvature * t²) perpendicular a esa dirección. Mismo
-    principio que draw_parabolic_trajectory en trajectories.py, en miniatura.
+    cuadrático (curvature * t²) perpendicular a esa dirección.
     """
     cos_a, sin_a = np.cos(angle), np.sin(angle)
     perp_angle = angle + np.pi / 2
