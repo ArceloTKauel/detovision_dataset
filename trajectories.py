@@ -219,6 +219,37 @@ def draw_trajectory(
                 _stamp_heatmap(heatmap, py, px, mask)
 
 
+def _ellipse_visible_fraction(
+    start: tuple[float, float],
+    theta: float,
+    a: float,
+    b: float,
+    side: int,
+    h: int,
+    w: int,
+    num_samples: int = 200,
+) -> float:
+    """
+    Estimación barata (sin rasterizar) de qué fracción del lazo completo cae
+    dentro del lienzo [0,h)x[0,w): sortea num_samples puntos a lo largo de la
+    elipse paramétrica y mide qué proporción queda dentro de los límites.
+    Usada para decidir si una geometría de lazo queda razonablemente contenida
+    en el cuadro antes de rasterizarla de verdad.
+    """
+    sy, sx = start
+    uy, ux = np.sin(theta), np.cos(theta)
+    vy, vx = side * np.cos(theta), -side * np.sin(theta)
+    cy = sy + a * uy
+    cx = sx + a * ux
+
+    t = np.linspace(0, 2 * np.pi, num_samples, endpoint=False)
+    py = cy + a * np.cos(t) * uy + b * np.sin(t) * vy
+    px = cx + a * np.cos(t) * ux + b * np.sin(t) * vx
+
+    inside = (py >= 0) & (py < h) & (px >= 0) & (px < w)
+    return float(inside.mean())
+
+
 def draw_returning_parabola(
     tensor: np.ndarray,
     start: tuple[float, float],
@@ -228,6 +259,8 @@ def draw_returning_parabola(
     erase_prob: float = 0.0,
     erase_frac_range: tuple[float, float] = (0.01, 0.05),
     heatmap: np.ndarray | None = None,
+    min_visible_fraction: float = 0.0,
+    max_attempts: int = 20,
 ) -> None:
     """
     Dibuja una trayectoria en forma de lazo/óvalo que parte de `start`
@@ -239,16 +272,26 @@ def draw_returning_parabola(
     Usa Bresenham para interpolar saltos entre pasos consecutivos.
     erase_prob: probabilidad por oportunidad de dibujo de activar un borrado.
     erase_frac_range: (min, max) fracción del largo total a borrar por sección.
+    min_visible_fraction: si > 0, resortea la geometría del lazo (hasta
+    max_attempts veces) hasta que al menos esa fracción quede dentro del
+    lienzo. Con 0.0 (default) no hay restricción: el lazo puede salir
+    libremente del cuadro, como hasta ahora.
     """
     h, w = tensor.shape
     oy, ox = origin
     sy, sx = start
     diagonal = np.hypot(h, w)
 
-    theta = rng.uniform(0, 2 * np.pi)
-    a = rng.uniform(diagonal * 0.15, diagonal * 0.75)  # semi-eje mayor: alcance del lazo
-    b = a * rng.uniform(0.08, 0.35)  # semi-eje menor: ancho del lazo
-    side = 1 if rng.random() < 0.5 else -1
+    for _ in range(max_attempts):
+        theta = rng.uniform(0, 2 * np.pi)
+        a = rng.uniform(diagonal * 0.15, diagonal * 0.75)  # semi-eje mayor: alcance del lazo
+        b = a * rng.uniform(0.08, 0.35)  # semi-eje menor: ancho del lazo
+        side = 1 if rng.random() < 0.5 else -1
+
+        if min_visible_fraction <= 0.0:
+            break
+        if _ellipse_visible_fraction(start, theta, a, b, side, h, w) >= min_visible_fraction:
+            break
 
     # Eje mayor (u) en dirección theta, eje menor (v) perpendicular
     uy, ux = np.sin(theta), np.cos(theta)
@@ -322,9 +365,13 @@ def draw_returning_parabola(
 
                     burst_remaining = rng.integers(0, 3)
 
+                    # Spacing invertido respecto a la trayectoria recta: acá "lejos
+                    # del origen" es el ápice del lazo (máxima altura), donde la
+                    # metralla decelera y los puntos deben juntarse; "cerca del
+                    # origen" es el lanzamiento/aterrizaje, donde va más rápido.
                     dist_from_origin = np.sqrt((spy - oy) ** 2 + (spx - ox) ** 2)
                     ratio = min(dist_from_origin / max_dist, 1.0)
-                    spacing = ratio ** 2 * max_spacing
+                    spacing = (1 - ratio) ** 2 * max_spacing
                     next_draw_at = max(1, int(spacing + rng.uniform(-spacing * 0.3, spacing * 0.3)))
                     pixels_since_draw = 0
             else:
@@ -378,6 +425,13 @@ def draw_straight_trajectories(
         draw_trajectory(tensor, center, angle, length, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap)
 
 
+# Fracción mínima de trayectorias parabólicas que deben quedar mayormente
+# dentro del lienzo por imagen (está bien que varias se salgan del cuadro,
+# pero no todas) y umbral de "mayormente contenida" para cada una de ellas.
+MIN_CONTAINED_FRACTION = 0.25
+MIN_VISIBLE_FRACTION = 0.5
+
+
 def draw_parabolic_trajectories(
     tensor: np.ndarray,
     centers: list[tuple[int, int]],
@@ -392,9 +446,13 @@ def draw_parabolic_trajectories(
     un centro cercano a la explosión, describe una elipse completa (semi-eje
     mayor y menor aleatorios, pudiendo salir del lienzo) y cierra exactamente
     sobre su punto de partida, simulando metralla que cae de regreso al punto
-    de impacto.
+    de impacto. Al menos MIN_CONTAINED_FRACTION de ellas quedan forzadas a
+    tener MIN_VISIBLE_FRACTION de su lazo dentro del cuadro; el resto es
+    libre y puede salirse del lienzo sin restricción.
     """
-    for _ in range(num_trajectories):
+    num_contained = max(1, round(num_trajectories * MIN_CONTAINED_FRACTION))
+
+    for i in range(num_trajectories):
         start = centers[rng.integers(0, len(centers))]
 
         if rng.random() < 0.5:
@@ -404,7 +462,9 @@ def draw_parabolic_trajectories(
         else:
             erase_prob = 0.0
             frac_lo, frac_hi = 0.0, 0.0
-        draw_returning_parabola(tensor, start, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap)
+
+        min_visible = MIN_VISIBLE_FRACTION if i < num_contained else 0.0
+        draw_returning_parabola(tensor, start, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap, min_visible)
 
 
 def draw_trajectories(
