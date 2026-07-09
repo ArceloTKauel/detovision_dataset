@@ -1,13 +1,14 @@
 #
 # Generación masiva del dataset sintético.
 #
-# Genera N pares de imágenes (entrada B/W + máscara en PNG modo paleta) usando
-# multiprocessing para aprovechar todos los cores disponibles de la CPU.
+# Genera N pares de imágenes (entrada B/W + máscara RGB) usando multiprocessing
+# para aprovechar todos los cores disponibles de la CPU.
 #
 # Estructura de salida:
 #     dataset/
 #         inputs/     → imágenes B/W binarizadas (entrada del modelo)
-#         targets/    → máscaras de segmentación en PNG modo paleta (salida esperada)
+#         targets/    → máscaras RGB (fondo/humo/derrumbe planos, trayectoria
+#                       con gradiente de azul)
 
 import os
 from multiprocessing import Pool
@@ -26,11 +27,11 @@ def generate_single(index: int) -> int:
 
     rng = np.random.default_rng(seed=index)
 
-    tensor, mask = generate_explosion(HEIGHT, WIDTH, rng)
+    tensor, mask, heatmap = generate_explosion(HEIGHT, WIDTH, rng)
 
     filename = f"{index:05d}.png"
     tensor_to_image(tensor, os.path.join(DATASET_DIR, "inputs", filename))
-    mask_to_rgb(mask, os.path.join(DATASET_DIR, "targets", filename))
+    mask_to_rgb(mask, heatmap, os.path.join(DATASET_DIR, "targets", filename))
 
     return index
 

@@ -34,7 +34,60 @@ import numpy as np
 
 from smoke import measure_smoke_width
 
-_MASK_OFFSETS = (-1, 0)  # trayectorias de 2 píxeles de grosor en la máscara
+# Pincel de gradiente para la clase trayectoria en la salida (heatmap):
+# kernel gaussiano radial, ancho para que el degradado sea gradual y visible
+# (intenso al centro, fino/tenue hacia el borde). Independiente del footprint
+# de la máscara categórica (clasificación), que se mantiene angosto.
+_HEATMAP_KERNEL_SIZE = 5
+_HEATMAP_KERNEL_SIGMA = 1.6
+
+_MASK_OFFSETS = (-1, 0)  # trayectorias de 2 píxeles de grosor en la máscara categórica
+
+
+def _make_gradient_kernel(size: int = _HEATMAP_KERNEL_SIZE, sigma: float = _HEATMAP_KERNEL_SIGMA) -> np.ndarray:
+    """Kernel gaussiano radial normalizado a pico 1.0 en el centro."""
+    ax = np.arange(size) - size // 2
+    xx, yy = np.meshgrid(ax, ax)
+    kernel = np.exp(-(xx ** 2 + yy ** 2) / (2 * sigma ** 2))
+    return kernel / kernel.max()
+
+
+_HEATMAP_KERNEL = _make_gradient_kernel()
+
+# Clases de mask que tienen prioridad sobre la trayectoria y nunca deben
+# recibir gradiente de heatmap (humo=1, derrumbe=3). Prioridad completa:
+# humo > trayectoria > derrumbe > fondo.
+_HIGHER_PRIORITY_CLASSES = (1, 3)
+
+
+def _stamp_heatmap(
+    heatmap: np.ndarray,
+    py: int,
+    px: int,
+    mask: np.ndarray | None = None,
+    kernel: np.ndarray = _HEATMAP_KERNEL,
+) -> None:
+    """
+    Estampa el kernel de gradiente centrado en (py, px), mezclando por máximo.
+    Si se pasa mask, respeta la prioridad de clases: no pinta sobre píxeles
+    que ya pertenecen a una clase de mayor prioridad (humo, derrumbe).
+    """
+    h, w = heatmap.shape
+    k = kernel.shape[0]
+    half = k // 2
+    for ky in range(k):
+        ny = py + ky - half
+        if not (0 <= ny < h):
+            continue
+        for kx in range(k):
+            nx = px + kx - half
+            if not (0 <= nx < w):
+                continue
+            if mask is not None and mask[ny, nx] in _HIGHER_PRIORITY_CLASSES:
+                continue
+            value = kernel[ky, kx] * 255
+            if value > heatmap[ny, nx]:
+                heatmap[ny, nx] = value
 
 
 def _paint_traj_mask(mask: np.ndarray, py: int, px: int, h: int, w: int) -> None:
@@ -79,6 +132,7 @@ def draw_trajectory(
     mask: np.ndarray | None = None,
     erase_prob: float = 0.0,
     erase_frac_range: tuple[float, float] = (0.01, 0.05),
+    heatmap: np.ndarray | None = None,
 ) -> None:
     """
     Dibuja una trayectoria recta punteada desde center en la dirección angle.
@@ -158,6 +212,12 @@ def draw_trajectory(
             if 0 <= py < h and 0 <= px < w:
                 _paint_traj_mask(mask, py, px, h, w)
 
+    # Heatmap: gradiente continuo sobre toda la línea (no solo los puntos dispersos)
+    if heatmap is not None and pixels_drawn > 0:
+        for py, px in points:
+            if 0 <= py < h and 0 <= px < w:
+                _stamp_heatmap(heatmap, py, px, mask)
+
 
 def draw_returning_parabola(
     tensor: np.ndarray,
@@ -167,6 +227,7 @@ def draw_returning_parabola(
     mask: np.ndarray | None = None,
     erase_prob: float = 0.0,
     erase_frac_range: tuple[float, float] = (0.01, 0.05),
+    heatmap: np.ndarray | None = None,
 ) -> None:
     """
     Dibuja una trayectoria en forma de lazo/óvalo que parte de `start`
@@ -277,6 +338,12 @@ def draw_returning_parabola(
             if 0 <= spy < h and 0 <= spx < w:
                 _paint_traj_mask(mask, spy, spx, h, w)
 
+    # Heatmap: gradiente continuo sobre todo el lazo (no solo los puntos dispersos)
+    if heatmap is not None and pixels_drawn > 0:
+        for spy, spx in all_points:
+            if 0 <= spy < h and 0 <= spx < w:
+                _stamp_heatmap(heatmap, spy, spx, mask)
+
 
 def draw_straight_trajectories(
     tensor: np.ndarray,
@@ -285,6 +352,7 @@ def draw_straight_trajectories(
     num_trajectories: int,
     rng: np.random.Generator,
     mask: np.ndarray | None = None,
+    heatmap: np.ndarray | None = None,
 ) -> None:
     """Genera múltiples trayectorias rectas desde centros aleatorios."""
     h, w = tensor.shape
@@ -307,7 +375,7 @@ def draw_straight_trajectories(
         else:
             erase_prob = 0.0
             frac_lo, frac_hi = 0.0, 0.0
-        draw_trajectory(tensor, center, angle, length, origin, rng, mask, erase_prob, (frac_lo, frac_hi))
+        draw_trajectory(tensor, center, angle, length, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap)
 
 
 def draw_parabolic_trajectories(
@@ -317,6 +385,7 @@ def draw_parabolic_trajectories(
     num_trajectories: int,
     rng: np.random.Generator,
     mask: np.ndarray | None = None,
+    heatmap: np.ndarray | None = None,
 ) -> None:
     """
     Genera múltiples trayectorias en forma de lazo/óvalo: cada una parte de
@@ -335,7 +404,7 @@ def draw_parabolic_trajectories(
         else:
             erase_prob = 0.0
             frac_lo, frac_hi = 0.0, 0.0
-        draw_returning_parabola(tensor, start, origin, rng, mask, erase_prob, (frac_lo, frac_hi))
+        draw_returning_parabola(tensor, start, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap)
 
 
 def draw_trajectories(
@@ -346,7 +415,8 @@ def draw_trajectories(
     num_parabolic: int,
     rng: np.random.Generator,
     mask: np.ndarray | None = None,
+    heatmap: np.ndarray | None = None,
 ) -> None:
     """Punto de entrada: dibuja trayectorias rectas y parabólicas."""
-    draw_straight_trajectories(tensor, centers, origin, num_straight, rng, mask)
-    draw_parabolic_trajectories(tensor, centers, origin, num_parabolic, rng, mask)
+    draw_straight_trajectories(tensor, centers, origin, num_straight, rng, mask, heatmap)
+    draw_parabolic_trajectories(tensor, centers, origin, num_parabolic, rng, mask, heatmap)

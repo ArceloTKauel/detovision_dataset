@@ -6,13 +6,14 @@ genera la zona de impacto (cuadrilátero), distribuye centros de metralla,
 dibuja el humo con textura Perlin, traza franjas de derrumbe (opcional) y
 trayectorias rectas y parabólicas, y produce simultáneamente dos salidas:
     - Imagen B/W (entrada del dataset): binarizada, con trayectorias punteadas.
-    - Máscara en PNG modo paleta (salida del dataset): segmentación por
-      índice de clase, con paleta embebida para visualización por colores.
-      Rojo=fondo, Verde=humo, Azul=trayectorias (continuas), Amarillo=derrumbe.
+      No lleva gradiente: se mantiene 100% binaria.
+    - Máscara en PNG RGB (salida del dataset): fondo/humo/derrumbe con color
+      plano (rojo/verde/amarillo); la trayectoria con gradiente real de azul
+      (intenso al centro, tenue hacia el borde), vía el canal heatmap.
 
 Funciones:
     - generate_explosion(height, width, rng): Genera la explosión completa.
-      Retorna una tupla (tensor B/W, mask de segmentación).
+      Retorna una tupla (tensor B/W, mask categórica, heatmap de trayectoria).
     - main(): Genera 4 pares de imágenes (explosion_N.png + explosion_N_mask.png).
 """
 
@@ -35,14 +36,16 @@ WIDTH = 768
 DRAW_LANDSLIDES = False
 
 
-def generate_explosion(height: int, width: int, rng: np.random.Generator | None = None) -> tuple[np.ndarray, np.ndarray]:
-    """Retorna (tensor B/W, mask de segmentación) generados en un solo pase."""
+def generate_explosion(height: int, width: int, rng: np.random.Generator | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Retorna (tensor B/W, mask categórica, heatmap de trayectoria), generados en un solo pase."""
     if rng is None:
         rng = np.random.default_rng()
 
     # Lienzo vacío en escala de grises + máscara de segmentación (0=fondo, 1=humo, 2=trayectoria)
+    # + heatmap de gradiente para la clase trayectoria (0 = sin trayectoria, 255 = núcleo)
     tensor = create_canvas(height, width)
     mask = np.zeros((height, width), dtype=np.uint8)
+    heatmap = np.zeros((height, width), dtype=np.uint8)
 
     # Zona de impacto: cuadrilátero aleatorio con su centroide como origen
     quad = generate_quadrilateral(height, width, rng)
@@ -67,7 +70,7 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     # Trayectorias de metralla (rectas + parabólicas de ida y vuelta)
     num_straight = rng.integers(15, 30)
     num_parabolic = rng.integers(15, 30)
-    draw_trajectories(tensor, centers, origin, num_straight, num_parabolic, rng, mask)
+    draw_trajectories(tensor, centers, origin, num_straight, num_parabolic, rng, mask, heatmap)
 
     # Derrumbe: franjas de desprendimiento independientes de la explosión,
     # aproximadamente paralelas entre sí, con puntos de inicio propios
@@ -83,21 +86,23 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
         num_stripes = int(np.clip(round(rng.normal(4.5, 1.5)), 1, 8))
         draw_landslides(tensor, num_stripes, np.radians(15), rng, mask, origin, exclusion_radius)
 
-    # Binarización: valores >= 128 pasan a blanco (255), el resto a negro (0)
+    # Binarización: valores >= 128 pasan a blanco (255), el resto a negro (0).
+    # Esto solo afecta el tensor de entrada; el heatmap de trayectoria (salida)
+    # nunca se binariza y conserva su gradiente real.
     tensor = np.where(tensor >= 128, 255, 0).astype(np.uint8)
 
     # Sincronizar mask: píxeles de humo que no sobrevivieron la binarización
     # vuelven a fondo. Las trayectorias (clase 2) no se tocan.
     mask[(tensor == 0) & (mask == 1)] = 0
 
-    return tensor, mask
+    return tensor, mask, heatmap
 
 
 def main():
     for i in range(1, 5):
-        tensor, mask = generate_explosion(HEIGHT, WIDTH)
+        tensor, mask, heatmap = generate_explosion(HEIGHT, WIDTH)
         tensor_to_image(tensor, f"explosion_{i}.png")
-        mask_to_rgb(mask, f"explosion_{i}_mask.png")
+        mask_to_rgb(mask, heatmap, f"explosion_{i}_mask.png")
 
 
 if __name__ == "__main__":
