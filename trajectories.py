@@ -261,6 +261,7 @@ def draw_returning_parabola(
     heatmap: np.ndarray | None = None,
     min_visible_fraction: float = 0.0,
     max_attempts: int = 20,
+    max_spacing: float = 50.0,
 ) -> None:
     """
     Dibuja una trayectoria en forma de lazo/óvalo que parte de `start`
@@ -276,6 +277,9 @@ def draw_returning_parabola(
     max_attempts veces) hasta que al menos esa fracción quede dentro del
     lienzo. Con 0.0 (default) no hay restricción: el lazo puede salir
     libremente del cuadro, como hasta ahora.
+    max_spacing: separación máxima entre puntos dibujados (en el lanzamiento/
+    aterrizaje, donde el spacing es mayor). Valores más chicos dan un
+    punteado más cercano/denso en todo el lazo.
     """
     h, w = tensor.shape
     oy, ox = origin
@@ -314,7 +318,6 @@ def draw_returning_parabola(
     grace_remaining = 0
     pixels_drawn = 0
     all_points = []
-    max_spacing = 50
 
     max_dist = 2 * a if a > 0 else 1  # distancia del punto más lejano del lazo a `start`
 
@@ -431,6 +434,11 @@ def draw_straight_trajectories(
 MIN_CONTAINED_FRACTION = 0.25
 MIN_VISIBLE_FRACTION = 0.5
 
+# Rango de max_spacing por trayectoria: valores bajos dan un punteado más
+# cercano/denso en todo el lazo; valores altos dan el punteado más disperso
+# de antes. Se sortea por trayectoria para tener variedad entre imágenes.
+PARABOLA_MAX_SPACING_RANGE = (8, 25)
+
 
 def draw_parabolic_trajectories(
     tensor: np.ndarray,
@@ -464,7 +472,9 @@ def draw_parabolic_trajectories(
             frac_lo, frac_hi = 0.0, 0.0
 
         min_visible = MIN_VISIBLE_FRACTION if i < num_contained else 0.0
-        draw_returning_parabola(tensor, start, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap, min_visible)
+        max_spacing = rng.uniform(*PARABOLA_MAX_SPACING_RANGE)
+        draw_returning_parabola(tensor, start, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap,
+                                 min_visible, max_spacing=max_spacing)
 
 
 def draw_trajectories(
