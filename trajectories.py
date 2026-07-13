@@ -59,6 +59,22 @@ _HEATMAP_KERNEL = _make_gradient_kernel()
 # humo > trayectoria > derrumbe > fondo.
 _HIGHER_PRIORITY_CLASSES = (1, 3)
 
+# Brillo del tensor de entrada por píxel de trayectoria: en vez de una curva
+# determinística por distancia, cada punto dibujado sortea su intensidad de
+# una gaussiana truncada al rango [_TRAJECTORY_BRIGHTNESS_RANGE], con la media
+# corrida hacia el extremo blanco para que la mayoría de los puntos salgan
+# claros pero con variación aleatoria punto a punto.
+_TRAJECTORY_BRIGHTNESS_RANGE = (50, 255)
+_TRAJECTORY_BRIGHTNESS_MEAN = 195.0
+_TRAJECTORY_BRIGHTNESS_STD = 55.0
+
+
+def _trajectory_brightness(rng: np.random.Generator) -> int:
+    """Sortea el brillo de un píxel de trayectoria de una gaussiana truncada."""
+    value = rng.normal(_TRAJECTORY_BRIGHTNESS_MEAN, _TRAJECTORY_BRIGHTNESS_STD)
+    value = np.clip(value, *_TRAJECTORY_BRIGHTNESS_RANGE)
+    return int(value)
+
 
 def _stamp_heatmap(
     heatmap: np.ndarray,
@@ -162,6 +178,7 @@ def draw_trajectory(
     grace_remaining = 0
     pixels_drawn = 0
     max_spacing = 50
+    max_dist = length if length > 0 else 1
 
     for py, px in points:
         if erase_remaining > 0:
@@ -177,7 +194,8 @@ def draw_trajectory(
         if burst_remaining > 0:
             if rng.random() < 0.7:
                 if 0 <= py < h and 0 <= px < w:
-                    tensor[py, px] = 255
+                    brightness = _trajectory_brightness(rng)
+                    tensor[py, px] = max(tensor[py, px], brightness)
                     pixels_drawn += 1
             burst_remaining -= 1
             continue
@@ -190,7 +208,8 @@ def draw_trajectory(
                 next_draw_at = 1
             else:
                 if 0 <= py < h and 0 <= px < w:
-                    tensor[py, px] = 255
+                    brightness = _trajectory_brightness(rng)
+                    tensor[py, px] = max(tensor[py, px], brightness)
                     pixels_drawn += 1
 
                 # Iniciar ráfaga de 1-3 píxeles consecutivos
@@ -198,7 +217,6 @@ def draw_trajectory(
 
                 # Spacing cuadrático: ratio² * max_spacing
                 dist_from_origin = np.sqrt((py - oy) ** 2 + (px - ox) ** 2)
-                max_dist = length if length > 0 else 1
                 ratio = min(dist_from_origin / max_dist, 1.0)
                 spacing = ratio ** 2 * max_spacing
                 next_draw_at = max(1, int(spacing + rng.uniform(-spacing * 0.3, spacing * 0.3)))
@@ -350,7 +368,8 @@ def draw_returning_parabola(
             if burst_remaining > 0:
                 if rng.random() < 0.7:
                     if 0 <= spy < h and 0 <= spx < w:
-                        tensor[spy, spx] = 255
+                        brightness = _trajectory_brightness(rng)
+                        tensor[spy, spx] = max(tensor[spy, spx], brightness)
                         pixels_drawn += 1
                 burst_remaining -= 1
                 continue
@@ -363,7 +382,8 @@ def draw_returning_parabola(
                     next_draw_at = 1
                 else:
                     if 0 <= spy < h and 0 <= spx < w:
-                        tensor[spy, spx] = 255
+                        brightness = _trajectory_brightness(rng)
+                        tensor[spy, spx] = max(tensor[spy, spx], brightness)
                         pixels_drawn += 1
 
                     burst_remaining = rng.integers(0, 3)

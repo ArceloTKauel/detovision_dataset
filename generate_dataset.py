@@ -6,7 +6,7 @@
 #
 # Estructura de salida:
 #     dataset/
-#         inputs/     → imágenes B/W binarizadas (entrada del modelo)
+#         inputs/     → imágenes en escala de grises (entrada del modelo)
 #         targets/    → máscaras RGB (fondo/humo/derrumbe planos, trayectoria
 #                       con gradiente de azul)
 
