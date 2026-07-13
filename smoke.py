@@ -70,17 +70,36 @@ def draw_smoke(
     # === ZONA CORE (0 a 25% del radio) ===
     # Zona más brillante y densa, casi sólida
     core_radius = smoke_radius * 0.25
-    core_mask = distorted_dist < core_radius
+    # Banda de transición centrada en core_radius: sin ella, el brillo (perlin_fine
+    # vs perlin) y la probabilidad de dibujo (100% vs ~90%) cambian de golpe justo
+    # en el borde del core, lo que se ve como una costura/corte. Dentro de la banda
+    # se mezclan ambos ruidos y se mantiene dibujo 100% (sin agujeros) para que la
+    # transición sea gradual.
+    seam_half_width = smoke_radius * 0.06
+    seam_lo = core_radius - seam_half_width
+    seam_hi = core_radius + seam_half_width
+
+    core_mask = distorted_dist < seam_lo
     core_brightness = (255 * (0.85 + perlin_fine[core_mask] * 0.15)).clip(0, 255).astype(np.uint8)
     region[core_mask] = np.maximum(region[core_mask], core_brightness)
     if mask_region is not None:
         mask_region[core_mask] = 1
 
-    # === ZONA MID (25% a 50% del radio) ===
+    # === ZONA DE TRANSICIÓN (seam_lo a seam_hi) ===
+    seam_mask = (distorted_dist >= seam_lo) & (distorted_dist < seam_hi)
+    t = (distorted_dist[seam_mask] - seam_lo) / (seam_hi - seam_lo)
+    t = t * t * (3 - 2 * t)  # smoothstep: 0 en seam_lo, 1 en seam_hi
+    perlin_seam = perlin_fine[seam_mask] * (1 - t) + perlin[seam_mask] * t
+    seam_brightness = (255 * (1 - 0.3 * t) * (0.85 + perlin_seam * 0.15)).clip(0, 255).astype(np.uint8)
+    region[seam_mask] = np.maximum(region[seam_mask], seam_brightness)
+    if mask_region is not None:
+        mask_region[seam_mask] = 1
+
+    # === ZONA MID (seam_hi a 50% del radio) ===
     # Densidad decreciente, probabilidad de dibujar baja con la distancia
     mid_radius = smoke_radius * 0.5
-    mid_mask = (distorted_dist >= core_radius) & (distorted_dist < mid_radius)
-    ratio_mid = (distorted_dist[mid_mask] - core_radius) / (mid_radius - core_radius)
+    mid_mask = (distorted_dist >= seam_hi) & (distorted_dist < mid_radius)
+    ratio_mid = (distorted_dist[mid_mask] - seam_hi) / (mid_radius - seam_hi)
     prob_mid = 0.9 - 0.4 * ratio_mid  # probabilidad de 90% a 50%
     brightness_mid = (255 * (1 - ratio_mid * 0.3) * (0.7 + perlin[mid_mask] * 0.3)).clip(0, 255).astype(np.uint8)
     mid_drawn = perlin[mid_mask] > (1 - prob_mid)

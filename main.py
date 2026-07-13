@@ -5,8 +5,10 @@ Orquesta el pipeline completo de generación en un solo pase: crea el lienzo,
 genera la zona de impacto (cuadrilátero), distribuye centros de metralla,
 dibuja el humo con textura Perlin, traza franjas de derrumbe (opcional) y
 trayectorias rectas y parabólicas, y produce simultáneamente dos salidas:
-    - Imagen B/W (entrada del dataset): binarizada, con trayectorias punteadas.
-      No lleva gradiente: se mantiene 100% binaria.
+    - Imagen en escala de grises (entrada del dataset): el humo queda en
+      gradiente continuo (más intenso cerca del centro de la explosión, más
+      tenue hacia el borde). Las trayectorias por ahora siguen dibujándose
+      a blanco pleno (255); su propio gradiente es un cambio pendiente.
     - Máscara en PNG RGB (salida del dataset): fondo/humo/derrumbe con color
       plano (rojo/verde/amarillo); la trayectoria con gradiente real de azul
       (intenso al centro, tenue hacia el borde), vía el canal heatmap.
@@ -86,13 +88,9 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
         num_stripes = int(np.clip(round(rng.normal(4.5, 1.5)), 1, 8))
         draw_landslides(tensor, num_stripes, np.radians(15), rng, mask, origin, exclusion_radius)
 
-    # Binarización: valores >= 128 pasan a blanco (255), el resto a negro (0).
-    # Esto solo afecta el tensor de entrada; el heatmap de trayectoria (salida)
-    # nunca se binariza y conserva su gradiente real.
-    tensor = np.where(tensor >= 128, 255, 0).astype(np.uint8)
-
-    # Sincronizar mask: píxeles de humo que no sobrevivieron la binarización
-    # vuelven a fondo. Las trayectorias (clase 2) no se tocan.
+    # Sincronizar mask: píxeles de humo que quedaron en negro puro (p. ej.
+    # manchas sustractivas que no dibujaron nada) vuelven a fondo. Las
+    # trayectorias (clase 2) no se tocan.
     mask[(tensor == 0) & (mask == 1)] = 0
 
     return tensor, mask, heatmap
