@@ -63,15 +63,22 @@ _HIGHER_PRIORITY_CLASSES = (1, 3)
 # determinística por distancia, cada punto dibujado sortea su intensidad de
 # una gaussiana truncada al rango [_TRAJECTORY_BRIGHTNESS_RANGE], con la media
 # corrida hacia el extremo blanco para que la mayoría de los puntos salgan
-# claros pero con variación aleatoria punto a punto.
+# claros pero con variación aleatoria punto a punto. La media se sortea una
+# vez por trayectoria (uniforme en _TRAJECTORY_BRIGHTNESS_MEAN_RANGE) para que
+# distintas trayectorias tengan distinto nivel de brillo entre sí.
 _TRAJECTORY_BRIGHTNESS_RANGE = (50, 255)
-_TRAJECTORY_BRIGHTNESS_MEAN = 195.0
+_TRAJECTORY_BRIGHTNESS_MEAN_RANGE = (180.0, 200.0)
 _TRAJECTORY_BRIGHTNESS_STD = 55.0
 
 
-def _trajectory_brightness(rng: np.random.Generator) -> int:
+def _sample_trajectory_brightness_mean(rng: np.random.Generator) -> float:
+    """Sortea la media de brillo de una trayectoria (uniforme, una vez por trayectoria)."""
+    return rng.uniform(*_TRAJECTORY_BRIGHTNESS_MEAN_RANGE)
+
+
+def _trajectory_brightness(rng: np.random.Generator, mean: float) -> int:
     """Sortea el brillo de un píxel de trayectoria de una gaussiana truncada."""
-    value = rng.normal(_TRAJECTORY_BRIGHTNESS_MEAN, _TRAJECTORY_BRIGHTNESS_STD)
+    value = rng.normal(mean, _TRAJECTORY_BRIGHTNESS_STD)
     value = np.clip(value, *_TRAJECTORY_BRIGHTNESS_RANGE)
     return int(value)
 
@@ -170,6 +177,7 @@ def draw_trajectory(
 
     points = bresenham(cy, cx, end_y, end_x)
     total_len = max(len(points), 1)
+    brightness_mean = _sample_trajectory_brightness_mean(rng)
 
     pixels_since_draw = 0
     next_draw_at = 0
@@ -194,7 +202,7 @@ def draw_trajectory(
         if burst_remaining > 0:
             if rng.random() < 0.7:
                 if 0 <= py < h and 0 <= px < w:
-                    brightness = _trajectory_brightness(rng)
+                    brightness = _trajectory_brightness(rng, brightness_mean)
                     tensor[py, px] = max(tensor[py, px], brightness)
                     pixels_drawn += 1
             burst_remaining -= 1
@@ -208,7 +216,7 @@ def draw_trajectory(
                 next_draw_at = 1
             else:
                 if 0 <= py < h and 0 <= px < w:
-                    brightness = _trajectory_brightness(rng)
+                    brightness = _trajectory_brightness(rng, brightness_mean)
                     tensor[py, px] = max(tensor[py, px], brightness)
                     pixels_drawn += 1
 
@@ -328,6 +336,7 @@ def draw_returning_parabola(
 
     num_steps = max(int(a * sweep), 2)
     total_len = max(num_steps, 1)
+    brightness_mean = _sample_trajectory_brightness_mean(rng)
     prev_py, prev_px = int(round(sy)), int(round(sx))
     pixels_since_draw = 0
     next_draw_at = 0
@@ -368,7 +377,7 @@ def draw_returning_parabola(
             if burst_remaining > 0:
                 if rng.random() < 0.7:
                     if 0 <= spy < h and 0 <= spx < w:
-                        brightness = _trajectory_brightness(rng)
+                        brightness = _trajectory_brightness(rng, brightness_mean)
                         tensor[spy, spx] = max(tensor[spy, spx], brightness)
                         pixels_drawn += 1
                 burst_remaining -= 1
@@ -382,7 +391,7 @@ def draw_returning_parabola(
                     next_draw_at = 1
                 else:
                     if 0 <= spy < h and 0 <= spx < w:
-                        brightness = _trajectory_brightness(rng)
+                        brightness = _trajectory_brightness(rng, brightness_mean)
                         tensor[spy, spx] = max(tensor[spy, spx], brightness)
                         pixels_drawn += 1
 
