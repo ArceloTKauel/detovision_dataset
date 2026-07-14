@@ -55,14 +55,14 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
 
     # Centro principal de la explosión
     center_size = rng.integers(1, 3)
-    draw_center(tensor, origin, center_size, mask)
+    draw_center(tensor, origin, center_size, rng, mask)
 
     # Centros secundarios distribuidos dentro del cuadrilátero (simulan fragmentos)
     num_centers = rng.integers(40, 80)
     centers = distribute_centers_in_quadrilateral(quad, num_centers, rng)
 
     for center in centers:
-        draw_center(tensor, center, rng.integers(0, 2), mask)
+        draw_center(tensor, center, rng.integers(0, 2), rng, mask)
 
     # Humo: radio proporcional al tamaño del lienzo
     base_length = min(height, width) * rng.uniform(0.25, 0.40)

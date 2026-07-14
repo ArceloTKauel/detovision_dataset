@@ -10,8 +10,10 @@ Funciones:
     - generate_quadrilateral(height, width, rng, margin): Genera 4 vértices
       aleatorios alrededor de un centro random, formando la zona de impacto.
     - centroid_of_polygon(vertices): Calcula el centroide promediando vértices.
-    - draw_center(tensor, center, size, mask): Dibuja un cuadrado blanco de lado
-      (2*size+1) centrado en la posición dada. Si se pasa mask, marca los
+    - draw_center(tensor, center, size, rng, mask): Dibuja un cuadrado en la
+      posición dada, de lado (2*size+1), con brillo sorteado por debajo del
+      rango del núcleo de humo (ver smoke.py) para que quede camuflado una
+      vez que draw_smoke se dibuje encima. Si se pasa mask, marca los
       píxeles como humo (clase 1).
     - distribute_centers_in_quadrilateral(vertices, num_points, rng): Distribuye
       puntos aleatorios uniformemente dentro del cuadrilátero usando muestreo
@@ -50,20 +52,30 @@ def centroid_of_polygon(vertices: np.ndarray) -> tuple[int, int]:
     return cy, cx
 
 
+# Rango de brillo de los cuadrados de centro: deliberadamente por debajo del
+# núcleo de humo (~217-255, ver smoke.py core_brightness) para que, una vez
+# que draw_smoke se dibuja encima (después, con np.maximum), el cuadrado
+# quede camuflado dentro de la textura del humo en vez de verse como un
+# parche plano y perfectamente cuadrado.
+_CENTER_BRIGHTNESS_RANGE = (120.0, 200.0)
+
+
 def draw_center(
     tensor: np.ndarray,
     center: tuple[int, int],
     size: int,
+    rng: np.random.Generator,
     mask: np.ndarray | None = None,
 ) -> None:
-    """Dibuja un cuadrado blanco de lado (2*size+1) píxeles."""
+    """Dibuja un cuadrado de lado (2*size+1) píxeles, con brillo variable por píxel."""
     h, w = tensor.shape
     cy, cx = center
     for dy in range(-size, size + 1):
         for dx in range(-size, size + 1):
             ny, nx = cy + dy, cx + dx
             if 0 <= ny < h and 0 <= nx < w:
-                tensor[ny, nx] = 255
+                brightness = int(rng.uniform(*_CENTER_BRIGHTNESS_RANGE))
+                tensor[ny, nx] = max(tensor[ny, nx], brightness)
                 # Los centros son parte del humo en la máscara (clase 1)
                 if mask is not None:
                     mask[ny, nx] = 1
