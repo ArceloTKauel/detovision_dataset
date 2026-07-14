@@ -67,7 +67,7 @@ _HIGHER_PRIORITY_CLASSES = (1, 3)
 # vez por trayectoria (uniforme en _TRAJECTORY_BRIGHTNESS_MEAN_RANGE) para que
 # distintas trayectorias tengan distinto nivel de brillo entre sí.
 _TRAJECTORY_BRIGHTNESS_RANGE = (50, 255)
-_TRAJECTORY_BRIGHTNESS_MEAN_RANGE = (180.0, 200.0)
+_TRAJECTORY_BRIGHTNESS_MEAN_RANGE = (60.0, 200.0)
 _TRAJECTORY_BRIGHTNESS_STD = 55.0
 
 
