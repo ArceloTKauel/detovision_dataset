@@ -69,10 +69,12 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     smoke_radius = base_length * rng.uniform(0.15, 0.3)
     draw_smoke(tensor, centers, smoke_radius, rng, mask)
 
-    # Trayectorias de metralla (rectas + parabólicas de ida y vuelta)
+    # Trayectorias de metralla (rectas + parabólicas de ida y vuelta + arcos
+    # de sobrevuelo, fragmentos grandes que vuelan por encima de la nube)
     num_straight = rng.integers(15, 30)
     num_parabolic = rng.integers(15, 30)
-    draw_trajectories(tensor, centers, origin, num_straight, num_parabolic, rng, mask, heatmap)
+    num_flyover = rng.integers(1, 4)
+    draw_trajectories(tensor, centers, origin, num_straight, num_parabolic, rng, mask, heatmap, num_flyover)
 
     # Derrumbe: franjas de desprendimiento independientes de la explosión,
     # aproximadamente paralelas entre sí, con puntos de inicio propios

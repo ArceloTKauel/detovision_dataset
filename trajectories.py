@@ -424,6 +424,155 @@ def draw_returning_parabola(
                 _stamp_heatmap(heatmap, spy, spx, mask)
 
 
+def draw_flyover_trajectory(
+    tensor: np.ndarray,
+    start: tuple[float, float],
+    origin: tuple[int, int],
+    rng: np.random.Generator,
+    mask: np.ndarray | None = None,
+    erase_prob: float = 0.0,
+    erase_frac_range: tuple[float, float] = (0.01, 0.05),
+    heatmap: np.ndarray | None = None,
+    max_spacing: float = 50.0,
+    reach_range: tuple[float, float] = (0.2, 0.45),
+    aspect_range: tuple[float, float] = (0.25, 0.55),
+    height_factor_range: tuple[float, float] = (1.2, 1.8),
+) -> None:
+    """
+    Dibuja una trayectoria en forma de arco abierto (medio lazo) que parte de
+    `start`, se eleva "sobrevolando" la nube de humo (el ápice queda más
+    lejos del origen que el propio borde del humo) y aterriza en otro punto,
+    a diferencia de draw_returning_parabola que cierra sobre el mismo punto
+    de partida. Simula un fragmento grande que vuela en un arco amplio por
+    encima de la explosión.
+    Es medio lazo (media elipse, barrido de pi) orientado para que el ápice
+    quede siempre del lado contrario al origen (hacia "afuera"/"arriba" de
+    la nube), nunca atravesando la explosión.
+    reach_range: fracción de min(h, w) usada como semi-eje mayor `a`
+    (separación horizontal entre despegue y aterrizaje).
+    aspect_range: relación b/a (altura del arco respecto al alcance) para que
+    el arco sea achatado tipo "arcoíris" en vez de un semicírculo cerrado.
+    height_factor_range: piso mínimo del semi-eje menor `b`, como múltiplo
+    del ancho de humo medido desde el origen hacia afuera, para asegurar que
+    el ápice quede por encima del borde del humo incluso si `a` sale chico.
+    """
+    h, w = tensor.shape
+    oy, ox = origin
+    sy, sx = start
+
+    # Dirección "hacia afuera": del origen hacia el punto de partida. El arco
+    # siempre se abre hacia este lado para sobrevolar el humo, nunca hacia
+    # el origen.
+    out_y, out_x = sy - oy, sx - ox
+    out_norm = np.hypot(out_y, out_x)
+    if out_norm < 1e-6:
+        out_y, out_x, out_norm = -1.0, 0.0, 1.0
+    vy, vx = out_y / out_norm, out_x / out_norm
+
+    # Dirección tangencial (perpendicular a la de "afuera"): define hacia
+    # dónde queda el punto de aterrizaje respecto al despegue.
+    uy, ux = -vx, vy
+    if rng.random() < 0.5:
+        uy, ux = -uy, -ux
+
+    out_angle = np.arctan2(vy, vx)
+    smoke_extent = measure_smoke_width(tensor, origin, out_angle)
+
+    a = rng.uniform(*reach_range) * min(h, w)
+    b = max(a * rng.uniform(*aspect_range), smoke_extent * rng.uniform(*height_factor_range))
+
+    cy = sy + a * uy
+    cx = sx + a * ux
+
+    apex_y = cy + b * vy
+    apex_x = cx + b * vx
+    max_dist = max(np.hypot(apex_y - oy, apex_x - ox), 1.0)
+
+    num_steps = max(int(a * np.pi), 2)
+    total_len = max(num_steps, 1)
+    brightness_mean = _sample_trajectory_brightness_mean(rng)
+    prev_py, prev_px = int(round(sy)), int(round(sx))
+    pixels_since_draw = 0
+    next_draw_at = 0
+    burst_remaining = 0
+    erase_remaining = 0
+    grace_remaining = 0
+    pixels_drawn = 0
+    all_points = []
+
+    for i in range(num_steps + 1):
+        progress = i / num_steps
+        t = np.pi - progress * np.pi  # de start (t=pi) a aterrizaje (t=0), pasando por el ápice (t=pi/2)
+        cos_t = np.cos(t)
+        sin_t = np.sin(t)
+
+        py = int(round(cy + a * cos_t * uy + b * sin_t * vy))
+        px = int(round(cx + a * cos_t * ux + b * sin_t * vx))
+
+        if i > 0 and (abs(py - prev_py) > 1 or abs(px - prev_px) > 1):
+            segment = bresenham(prev_py, prev_px, py, px)
+        else:
+            segment = [(py, px)]
+
+        for spy, spx in segment:
+            all_points.append((spy, spx))
+
+            if erase_remaining > 0:
+                erase_remaining -= 1
+                if erase_remaining == 0:
+                    grace_remaining = int(rng.uniform(0.05, 0.15) * total_len)
+                continue
+
+            if grace_remaining > 0:
+                grace_remaining -= 1
+
+            if burst_remaining > 0:
+                if rng.random() < 0.7:
+                    if 0 <= spy < h and 0 <= spx < w:
+                        brightness = _trajectory_brightness(rng, brightness_mean)
+                        tensor[spy, spx] = max(tensor[spy, spx], brightness)
+                        pixels_drawn += 1
+                burst_remaining -= 1
+                continue
+
+            if pixels_since_draw >= next_draw_at:
+                if grace_remaining == 0 and rng.random() < erase_prob:
+                    erase_frac = rng.uniform(erase_frac_range[0], erase_frac_range[1])
+                    erase_remaining = max(1, int(erase_frac * total_len))
+                    pixels_since_draw = 0
+                    next_draw_at = 1
+                else:
+                    if 0 <= spy < h and 0 <= spx < w:
+                        brightness = _trajectory_brightness(rng, brightness_mean)
+                        tensor[spy, spx] = max(tensor[spy, spx], brightness)
+                        pixels_drawn += 1
+
+                    burst_remaining = rng.integers(0, 3)
+
+                    # Mismo criterio que draw_returning_parabola: lejos del
+                    # origen (cerca del ápice) = decelera = puntos densos;
+                    # cerca del origen (despegue/aterrizaje) = rápido = disperso.
+                    dist_from_origin = np.sqrt((spy - oy) ** 2 + (spx - ox) ** 2)
+                    ratio = min(dist_from_origin / max_dist, 1.0)
+                    spacing = (1 - ratio) ** 2 * max_spacing
+                    next_draw_at = max(1, int(spacing + rng.uniform(-spacing * 0.3, spacing * 0.3)))
+                    pixels_since_draw = 0
+            else:
+                pixels_since_draw += 1
+
+        prev_py, prev_px = py, px
+
+    if mask is not None and pixels_drawn > 0:
+        for spy, spx in all_points:
+            if 0 <= spy < h and 0 <= spx < w:
+                _paint_traj_mask(mask, spy, spx, h, w)
+
+    if heatmap is not None and pixels_drawn > 0:
+        for spy, spx in all_points:
+            if 0 <= spy < h and 0 <= spx < w:
+                _stamp_heatmap(heatmap, spy, spx, mask)
+
+
 def draw_straight_trajectories(
     tensor: np.ndarray,
     centers: list[tuple[int, int]],
@@ -506,6 +655,32 @@ def draw_parabolic_trajectories(
                                  min_visible, max_spacing=max_spacing)
 
 
+def draw_flyover_trajectories(
+    tensor: np.ndarray,
+    centers: list[tuple[int, int]],
+    origin: tuple[int, int],
+    num_trajectories: int,
+    rng: np.random.Generator,
+    mask: np.ndarray | None = None,
+    heatmap: np.ndarray | None = None,
+) -> None:
+    """Genera trayectorias de arco abierto que sobrevuelan la nube de humo."""
+    for _ in range(num_trajectories):
+        start = centers[rng.integers(0, len(centers))]
+
+        if rng.random() < 0.5:
+            erase_prob = rng.uniform(0.0, 0.20)
+            frac_lo = rng.uniform(0.01, 0.03)
+            frac_hi = rng.uniform(frac_lo, 0.05)
+        else:
+            erase_prob = 0.0
+            frac_lo, frac_hi = 0.0, 0.0
+
+        max_spacing = rng.uniform(*PARABOLA_MAX_SPACING_RANGE)
+        draw_flyover_trajectory(tensor, start, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap,
+                                 max_spacing=max_spacing)
+
+
 def draw_trajectories(
     tensor: np.ndarray,
     centers: list[tuple[int, int]],
@@ -515,7 +690,9 @@ def draw_trajectories(
     rng: np.random.Generator,
     mask: np.ndarray | None = None,
     heatmap: np.ndarray | None = None,
+    num_flyover: int = 0,
 ) -> None:
-    """Punto de entrada: dibuja trayectorias rectas y parabólicas."""
+    """Punto de entrada: dibuja trayectorias rectas, parabólicas y de sobrevuelo."""
     draw_straight_trajectories(tensor, centers, origin, num_straight, rng, mask, heatmap)
     draw_parabolic_trajectories(tensor, centers, origin, num_parabolic, rng, mask, heatmap)
+    draw_flyover_trajectories(tensor, centers, origin, num_flyover, rng, mask, heatmap)
