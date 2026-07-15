@@ -7,7 +7,9 @@ variable: los puntos son densos cerca del origen y se separan cuadráticamente
 con la distancia (ratio² * max_spacing), simulando la desaceleración de la
 metralla. Además, cada punto de dibujo inicia una "ráfaga" de 1-5 píxeles
 consecutivos (cada uno con 70% de probabilidad) para generar agrupaciones
-orgánicas de puntos en vez de puntos solitarios equidistantes.
+orgánicas de puntos en vez de puntos solitarios equidistantes. Cada
+trayectoria sortea también un ancho (1, 2 o 3 píxeles; ver
+_sample_trajectory_width) que se aplica a todos sus puntos.
 
 Todas las funciones aceptan un parámetro opcional mask: si se pasa, dibuja
 las trayectorias completas (todos los píxeles, sin spacing ni ráfagas) como
@@ -38,7 +40,7 @@ from smoke import measure_smoke_width
 # kernel gaussiano radial, ancho para que el degradado sea gradual y visible
 # (intenso al centro, fino/tenue hacia el borde). Independiente del footprint
 # de la máscara categórica (clasificación), que se mantiene angosto.
-_HEATMAP_KERNEL_SIZE = 5
+_HEATMAP_KERNEL_SIZE = 3
 _HEATMAP_KERNEL_SIGMA = 1.6
 
 _MASK_OFFSETS = (-1, 0)  # trayectorias de 2 píxeles de grosor en la máscara categórica
@@ -81,6 +83,41 @@ def _trajectory_brightness(rng: np.random.Generator, mean: float) -> int:
     value = rng.normal(mean, _TRAJECTORY_BRIGHTNESS_STD)
     value = np.clip(value, *_TRAJECTORY_BRIGHTNESS_RANGE)
     return int(value)
+
+
+# Ancho (en píxeles) de una trayectoria en el tensor de entrada: variable
+# categórica sorteada una vez por trayectoria (no por píxel), simulando
+# fragmentos de metralla de distinto grosor. La mayoría son de 1 píxel, con
+# probabilidad baja de 2 y muy baja de 3. Cada ancho define un bloque de
+# offsets cuadrado centrado en el punto dibujado.
+_TRAJECTORY_WIDTH_VALUES = (1, 2, 3)
+_TRAJECTORY_WIDTH_PROBS = (0.85, 0.12, 0.03)
+_WIDTH_OFFSETS = {
+    1: (0,),
+    2: (-1, 0),
+    3: (-1, 0, 1),
+}
+
+
+def _sample_trajectory_width(rng: np.random.Generator) -> int:
+    """Sortea el ancho de una trayectoria completa (categórica ponderada)."""
+    return int(rng.choice(_TRAJECTORY_WIDTH_VALUES, p=_TRAJECTORY_WIDTH_PROBS))
+
+
+def _paint_trajectory_pixel(tensor: np.ndarray, py: int, px: int, brightness: int, width: int) -> None:
+    """Pinta un punto de trayectoria como un bloque de `width` x `width`
+    píxeles centrado en (py, px), mezclando por máximo y clipeado al lienzo.
+    """
+    h, w = tensor.shape
+    for dy in _WIDTH_OFFSETS[width]:
+        ny = py + dy
+        if not (0 <= ny < h):
+            continue
+        for dx in _WIDTH_OFFSETS[width]:
+            nx = px + dx
+            if not (0 <= nx < w):
+                continue
+            tensor[ny, nx] = max(tensor[ny, nx], brightness)
 
 
 def _stamp_heatmap(
@@ -178,6 +215,7 @@ def draw_trajectory(
     points = bresenham(cy, cx, end_y, end_x)
     total_len = max(len(points), 1)
     brightness_mean = _sample_trajectory_brightness_mean(rng)
+    width = _sample_trajectory_width(rng)
 
     pixels_since_draw = 0
     next_draw_at = 0
@@ -203,7 +241,7 @@ def draw_trajectory(
             if rng.random() < 0.7:
                 if 0 <= py < h and 0 <= px < w:
                     brightness = _trajectory_brightness(rng, brightness_mean)
-                    tensor[py, px] = max(tensor[py, px], brightness)
+                    _paint_trajectory_pixel(tensor, py, px, brightness, width)
                     pixels_drawn += 1
             burst_remaining -= 1
             continue
@@ -217,7 +255,7 @@ def draw_trajectory(
             else:
                 if 0 <= py < h and 0 <= px < w:
                     brightness = _trajectory_brightness(rng, brightness_mean)
-                    tensor[py, px] = max(tensor[py, px], brightness)
+                    _paint_trajectory_pixel(tensor, py, px, brightness, width)
                     pixels_drawn += 1
 
                 # Iniciar ráfaga de 1-3 píxeles consecutivos
@@ -337,6 +375,7 @@ def draw_returning_parabola(
     num_steps = max(int(a * sweep), 2)
     total_len = max(num_steps, 1)
     brightness_mean = _sample_trajectory_brightness_mean(rng)
+    width = _sample_trajectory_width(rng)
     prev_py, prev_px = int(round(sy)), int(round(sx))
     pixels_since_draw = 0
     next_draw_at = 0
@@ -378,7 +417,7 @@ def draw_returning_parabola(
                 if rng.random() < 0.7:
                     if 0 <= spy < h and 0 <= spx < w:
                         brightness = _trajectory_brightness(rng, brightness_mean)
-                        tensor[spy, spx] = max(tensor[spy, spx], brightness)
+                        _paint_trajectory_pixel(tensor, spy, spx, brightness, width)
                         pixels_drawn += 1
                 burst_remaining -= 1
                 continue
@@ -392,7 +431,7 @@ def draw_returning_parabola(
                 else:
                     if 0 <= spy < h and 0 <= spx < w:
                         brightness = _trajectory_brightness(rng, brightness_mean)
-                        tensor[spy, spx] = max(tensor[spy, spx], brightness)
+                        _paint_trajectory_pixel(tensor, spy, spx, brightness, width)
                         pixels_drawn += 1
 
                     burst_remaining = rng.integers(0, 3)
@@ -491,6 +530,7 @@ def draw_flyover_trajectory(
     num_steps = max(int(a * np.pi), 2)
     total_len = max(num_steps, 1)
     brightness_mean = _sample_trajectory_brightness_mean(rng)
+    width = _sample_trajectory_width(rng)
     prev_py, prev_px = int(round(sy)), int(round(sx))
     pixels_since_draw = 0
     next_draw_at = 0
@@ -530,7 +570,7 @@ def draw_flyover_trajectory(
                 if rng.random() < 0.7:
                     if 0 <= spy < h and 0 <= spx < w:
                         brightness = _trajectory_brightness(rng, brightness_mean)
-                        tensor[spy, spx] = max(tensor[spy, spx], brightness)
+                        _paint_trajectory_pixel(tensor, spy, spx, brightness, width)
                         pixels_drawn += 1
                 burst_remaining -= 1
                 continue
@@ -544,7 +584,7 @@ def draw_flyover_trajectory(
                 else:
                     if 0 <= spy < h and 0 <= spx < w:
                         brightness = _trajectory_brightness(rng, brightness_mean)
-                        tensor[spy, spx] = max(tensor[spy, spx], brightness)
+                        _paint_trajectory_pixel(tensor, spy, spx, brightness, width)
                         pixels_drawn += 1
 
                     burst_remaining = rng.integers(0, 3)
