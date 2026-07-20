@@ -94,8 +94,8 @@ def draw_center(
 # observado: 1) en las 6 imágenes de referencia. Media y desvío se sortean
 # una vez por imagen (no por píxel) para que la textura varíe de una
 # explosión a otra, igual que brightness_scale en smoke.py.
-_BACKGROUND_MEAN_RANGE = (6.0, 15.0)
-_BACKGROUND_STD_RANGE = (1.5, 5.0)
+_BACKGROUND_MEAN_RANGE = (15.0, 30.0)
+_BACKGROUND_STD_RANGE = (5.0, 10.0)
 _BACKGROUND_MAX = 40
 
 
