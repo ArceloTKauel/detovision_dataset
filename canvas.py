@@ -89,14 +89,13 @@ def draw_center(
 
 # Grano de fondo: calibrado contra los heatmaps de diferencia de video reales
 # sin binarizar (detovision_segmentation/inference/inputs/mascara_cambios_final_sinbin_*.png),
-# donde el fondo mide media ~6-15 y desvío ~1.5-5 por parche, sin apenas nada
-# por encima de ~30-40, y 0.000% de los píxeles en negro puro (mínimo real
-# observado: 1) en las 6 imágenes de referencia. Media y desvío se sortean
-# una vez por imagen (no por píxel) para que la textura varíe de una
-# explosión a otra, igual que brightness_scale en smoke.py.
-_BACKGROUND_MEAN_RANGE = (15.0, 30.0)
-_BACKGROUND_STD_RANGE = (5.0, 10.0)
-_BACKGROUND_MAX = 40
+# medido a mano con pixel_inspector_gui.py. Rango objetivo de la clase fondo:
+# 1 a 20. Media y desvío se sortean una vez por imagen (no por píxel) para
+# que la textura varíe de una explosión a otra, igual que brightness_scale
+# en smoke.py.
+_BACKGROUND_MEAN_RANGE = (7.0, 14.0)
+_BACKGROUND_STD_RANGE = (2.0, 4.0)
+_BACKGROUND_MAX = 20
 
 
 def apply_background_noise(

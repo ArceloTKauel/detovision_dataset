@@ -67,10 +67,11 @@ _HIGHER_PRIORITY_CLASSES = (1, 3)
 # corrida hacia el extremo blanco para que la mayoría de los puntos salgan
 # claros pero con variación aleatoria punto a punto. La media se sortea una
 # vez por trayectoria (uniforme en _TRAJECTORY_BRIGHTNESS_MEAN_RANGE) para que
-# distintas trayectorias tengan distinto nivel de brillo entre sí.
-_TRAJECTORY_BRIGHTNESS_RANGE = (50, 255)
-_TRAJECTORY_BRIGHTNESS_MEAN_RANGE = (60.0, 200.0)
-_TRAJECTORY_BRIGHTNESS_STD = 55.0
+# distintas trayectorias tengan distinto nivel de brillo entre sí. Rango
+# objetivo de la clase trayectoria (medido con pixel_inspector_gui.py): 2 a 100.
+_TRAJECTORY_BRIGHTNESS_RANGE = (2, 100)
+_TRAJECTORY_BRIGHTNESS_MEAN_RANGE = (10.0, 80.0)
+_TRAJECTORY_BRIGHTNESS_STD = 25.0
 
 
 def _sample_trajectory_brightness_mean(rng: np.random.Generator) -> float:

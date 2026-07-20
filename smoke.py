@@ -29,6 +29,23 @@ from perlin_noise import perlin_noise_2d
 # binarizar (mascara_cambios_final_sinbin_*), que nunca llegan a blanco puro.
 SMOKE_BRIGHTNESS_SCALE_RANGE = (0.45, 0.70)
 
+# Rango objetivo de la clase humo (medido con pixel_inspector_gui.py): 15 a
+# 255. _SMOKE_BRIGHTNESS_FLOOR evita que cualquier píxel dibujado como humo
+# quede por debajo de 15 (se aplica en el clip de cada zona). El resto del
+# pipeline (brightness_scale, grain, etc.) ya mantiene el grueso del humo
+# bien por debajo de 255; los "flecos" definidos más abajo son la única vía
+# para que un píxel puntual llegue cerca de blanco pleno, y con probabilidad
+# baja a propósito (ver _HOT_FLECK_PROB).
+_SMOKE_BRIGHTNESS_FLOOR = 15
+
+# Flecos brillantes: chispas/reflejos puntuales muy poco frecuentes que
+# rompen por encima del techo habitual del humo (~180) hasta casi blanco
+# pleno, independientes de brightness_scale (si no, nunca podrían acercarse
+# a 255 en una imagen con brightness_scale bajo). La probabilidad es baja
+# para que la gran mayoría del humo se mantenga por debajo de 200.
+_HOT_FLECK_PROB = 0.01
+_HOT_FLECK_RANGE = (200, 255)
+
 
 def sample_brightness_scale(rng: np.random.Generator) -> float:
     """Sortea la escala de brillo global de una explosión (una vez por imagen)."""
@@ -102,7 +119,7 @@ def draw_smoke(
     core_mask = distorted_dist < seam_lo
     core_brightness = (
         255 * (0.85 + perlin_fine[core_mask] * 0.15) * brightness_scale * grain_factor[core_mask]
-    ).clip(0, 255).astype(np.uint8)
+    ).clip(_SMOKE_BRIGHTNESS_FLOOR, 255).astype(np.uint8)
     region[core_mask] = np.maximum(region[core_mask], core_brightness)
     if mask_region is not None:
         mask_region[core_mask] = 1
@@ -114,7 +131,7 @@ def draw_smoke(
     perlin_seam = perlin_fine[seam_mask] * (1 - t) + perlin[seam_mask] * t
     seam_brightness = (
         255 * (1 - 0.3 * t) * (0.85 + perlin_seam * 0.15) * brightness_scale * grain_factor[seam_mask]
-    ).clip(0, 255).astype(np.uint8)
+    ).clip(_SMOKE_BRIGHTNESS_FLOOR, 255).astype(np.uint8)
     region[seam_mask] = np.maximum(region[seam_mask], seam_brightness)
     if mask_region is not None:
         mask_region[seam_mask] = 1
@@ -127,7 +144,7 @@ def draw_smoke(
     prob_mid = 0.9 - 0.4 * ratio_mid  # probabilidad de 90% a 50%
     brightness_mid = (
         255 * (1 - ratio_mid * 0.3) * (0.7 + perlin[mid_mask] * 0.3) * brightness_scale * grain_factor[mid_mask]
-    ).clip(0, 255).astype(np.uint8)
+    ).clip(_SMOKE_BRIGHTNESS_FLOOR, 255).astype(np.uint8)
     mid_drawn = perlin[mid_mask] > (1 - prob_mid)
     region[mid_mask] = np.where(
         mid_drawn,
@@ -145,7 +162,7 @@ def draw_smoke(
     prob_outer = 0.6 * (1 - ratio_outer) ** 2
     brightness_outer = (
         200 * (1 - ratio_outer * 0.7) * (0.6 + perlin[outer_mask] * 0.4) * brightness_scale * grain_factor[outer_mask]
-    ).clip(0, 255).astype(np.uint8)
+    ).clip(_SMOKE_BRIGHTNESS_FLOOR, 255).astype(np.uint8)
     outer_drawn = perlin[outer_mask] > (1 - prob_outer)
     region[outer_mask] = np.where(
         outer_drawn,
@@ -163,7 +180,7 @@ def draw_smoke(
     prob_fringe = 0.15 * (1 - ratio_fringe) ** 3
     brightness_fringe = (
         120 * (1 - ratio_fringe) * perlin[fringe_mask] * brightness_scale * grain_factor[fringe_mask]
-    ).clip(0, 255).astype(np.uint8)
+    ).clip(_SMOKE_BRIGHTNESS_FLOOR, 255).astype(np.uint8)
     fringe_drawn = perlin[fringe_mask] > (1 - prob_fringe)
     region[fringe_mask] = np.where(
         fringe_drawn,
@@ -173,6 +190,17 @@ def draw_smoke(
     if mask_region is not None:
         fringe_indices = np.argwhere(fringe_mask)
         mask_region[fringe_indices[fringe_drawn, 0], fringe_indices[fringe_drawn, 1]] = 1
+
+    # === FLECOS BRILLANTES (chispas raras cercanas a blanco pleno) ===
+    # Aplicado sobre el humo ya dibujado (todas las zonas), independiente de
+    # brightness_scale a propósito: es la única vía para que un píxel de
+    # humo llegue cerca de 255 aunque esta explosión haya salido "apagada".
+    smoke_so_far = region > 0
+    fleck_roll = rng.random(region.shape)
+    fleck_mask = smoke_so_far & (fleck_roll < _HOT_FLECK_PROB)
+    if fleck_mask.any():
+        fleck_brightness = rng.uniform(*_HOT_FLECK_RANGE, size=int(fleck_mask.sum())).astype(np.uint8)
+        region[fleck_mask] = np.maximum(region[fleck_mask], fleck_brightness)
 
     # === MANCHAS SUSTRACTIVAS (polígonos que recortan huecos en el humo) ===
     # Se generan en zonas donde el Perlin sustractivo es bajo (< 0.45),
