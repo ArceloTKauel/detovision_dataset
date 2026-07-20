@@ -27,6 +27,7 @@ from canvas import (
     centroid_of_polygon,
     draw_center,
     distribute_centers_in_quadrilateral,
+    apply_background_noise,
 )
 from smoke import draw_smoke, sample_brightness_scale
 from landslide import draw_landslides
@@ -100,6 +101,11 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     # manchas sustractivas que no dibujaron nada) vuelven a fondo. Las
     # trayectorias (clase 2) no se tocan.
     mask[(tensor == 0) & (mask == 1)] = 0
+
+    # Fondo granulado: recién ahora que el 0 ya cumplió su rol de centinela
+    # (measure_smoke_width, sync de mask de arriba), se rellenan los píxeles
+    # en negro puro con ruido dentro de un rango de gris oscuro.
+    apply_background_noise(tensor, rng)
 
     return tensor, mask, heatmap
 
