@@ -66,15 +66,21 @@ def draw_center(
     size: int,
     rng: np.random.Generator,
     mask: np.ndarray | None = None,
+    brightness_scale: float = 1.0,
 ) -> None:
-    """Dibuja un cuadrado de lado (2*size+1) píxeles, con brillo variable por píxel."""
+    """Dibuja un cuadrado de lado (2*size+1) píxeles, con brillo variable por píxel.
+
+    brightness_scale: misma escala de brillo global sorteada para el humo
+    (ver smoke.py::sample_brightness_scale), para que el rango de camuflaje
+    siga quedando por debajo del núcleo de humo aunque este se oscurezca.
+    """
     h, w = tensor.shape
     cy, cx = center
     for dy in range(-size, size + 1):
         for dx in range(-size, size + 1):
             ny, nx = cy + dy, cx + dx
             if 0 <= ny < h and 0 <= nx < w:
-                brightness = int(rng.uniform(*_CENTER_BRIGHTNESS_RANGE))
+                brightness = int(rng.uniform(*_CENTER_BRIGHTNESS_RANGE) * brightness_scale)
                 tensor[ny, nx] = max(tensor[ny, nx], brightness)
                 # Los centros son parte del humo en la máscara (clase 1)
                 if mask is not None:

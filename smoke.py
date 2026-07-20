@@ -22,6 +22,18 @@ from PIL import Image, ImageDraw
 
 from perlin_noise import perlin_noise_2d
 
+# Escala de brillo global de la explosión: sortea una vez por imagen (en
+# main.py, vía sample_brightness_scale) y se aplica tanto al humo como a los
+# centros camuflados debajo (ver canvas.py::draw_center), para que ninguno
+# sature a blanco pleno. Acerca el rango dinámico al de las referencias sin
+# binarizar (mascara_cambios_final_sinbin_*), que nunca llegan a blanco puro.
+SMOKE_BRIGHTNESS_SCALE_RANGE = (0.45, 0.70)
+
+
+def sample_brightness_scale(rng: np.random.Generator) -> float:
+    """Sortea la escala de brillo global de una explosión (una vez por imagen)."""
+    return rng.uniform(*SMOKE_BRIGHTNESS_SCALE_RANGE)
+
 
 def draw_smoke(
     tensor: np.ndarray,
@@ -29,6 +41,7 @@ def draw_smoke(
     smoke_radius: float,
     rng: np.random.Generator,
     mask: np.ndarray | None = None,
+    brightness_scale: float = 1.0,
 ) -> None:
     h, w = tensor.shape
 
@@ -63,6 +76,13 @@ def draw_smoke(
     perlin = perlin_noise_2d((region_h, region_w), scale=smoke_radius * 0.4, rng=rng, octaves=5)
     perlin_fine = perlin_noise_2d((region_h, region_w), scale=smoke_radius * 0.15, rng=rng, octaves=3)
 
+    # Grano fino: escala mucho más chica que perlin_fine, para romper la
+    # superficie lisa incluso dentro del core (textura fibrosa/granulada en
+    # vez de un relleno plano). Se multiplica sobre el brillo de TODAS las
+    # zonas junto con brightness_scale.
+    grain = perlin_noise_2d((region_h, region_w), scale=smoke_radius * 0.05, rng=rng, octaves=2)
+    grain_factor = 0.55 + 0.45 * grain
+
     # Distorsión del radio: el Perlin desplaza el borde ±30%, creando irregularidad
     radius_distortion = 1.0 + (perlin - 0.5) * 0.6
     distorted_dist = min_dist / radius_distortion
@@ -80,7 +100,9 @@ def draw_smoke(
     seam_hi = core_radius + seam_half_width
 
     core_mask = distorted_dist < seam_lo
-    core_brightness = (255 * (0.85 + perlin_fine[core_mask] * 0.15)).clip(0, 255).astype(np.uint8)
+    core_brightness = (
+        255 * (0.85 + perlin_fine[core_mask] * 0.15) * brightness_scale * grain_factor[core_mask]
+    ).clip(0, 255).astype(np.uint8)
     region[core_mask] = np.maximum(region[core_mask], core_brightness)
     if mask_region is not None:
         mask_region[core_mask] = 1
@@ -90,7 +112,9 @@ def draw_smoke(
     t = (distorted_dist[seam_mask] - seam_lo) / (seam_hi - seam_lo)
     t = t * t * (3 - 2 * t)  # smoothstep: 0 en seam_lo, 1 en seam_hi
     perlin_seam = perlin_fine[seam_mask] * (1 - t) + perlin[seam_mask] * t
-    seam_brightness = (255 * (1 - 0.3 * t) * (0.85 + perlin_seam * 0.15)).clip(0, 255).astype(np.uint8)
+    seam_brightness = (
+        255 * (1 - 0.3 * t) * (0.85 + perlin_seam * 0.15) * brightness_scale * grain_factor[seam_mask]
+    ).clip(0, 255).astype(np.uint8)
     region[seam_mask] = np.maximum(region[seam_mask], seam_brightness)
     if mask_region is not None:
         mask_region[seam_mask] = 1
@@ -101,7 +125,9 @@ def draw_smoke(
     mid_mask = (distorted_dist >= seam_hi) & (distorted_dist < mid_radius)
     ratio_mid = (distorted_dist[mid_mask] - seam_hi) / (mid_radius - seam_hi)
     prob_mid = 0.9 - 0.4 * ratio_mid  # probabilidad de 90% a 50%
-    brightness_mid = (255 * (1 - ratio_mid * 0.3) * (0.7 + perlin[mid_mask] * 0.3)).clip(0, 255).astype(np.uint8)
+    brightness_mid = (
+        255 * (1 - ratio_mid * 0.3) * (0.7 + perlin[mid_mask] * 0.3) * brightness_scale * grain_factor[mid_mask]
+    ).clip(0, 255).astype(np.uint8)
     mid_drawn = perlin[mid_mask] > (1 - prob_mid)
     region[mid_mask] = np.where(
         mid_drawn,
@@ -117,7 +143,9 @@ def draw_smoke(
     outer_mask = (distorted_dist >= mid_radius) & (distorted_dist < smoke_radius)
     ratio_outer = (distorted_dist[outer_mask] - mid_radius) / (smoke_radius - mid_radius)
     prob_outer = 0.6 * (1 - ratio_outer) ** 2
-    brightness_outer = (200 * (1 - ratio_outer * 0.7) * (0.6 + perlin[outer_mask] * 0.4)).clip(0, 255).astype(np.uint8)
+    brightness_outer = (
+        200 * (1 - ratio_outer * 0.7) * (0.6 + perlin[outer_mask] * 0.4) * brightness_scale * grain_factor[outer_mask]
+    ).clip(0, 255).astype(np.uint8)
     outer_drawn = perlin[outer_mask] > (1 - prob_outer)
     region[outer_mask] = np.where(
         outer_drawn,
@@ -133,7 +161,9 @@ def draw_smoke(
     fringe_mask = (distorted_dist >= smoke_radius) & (distorted_dist < fringe_radius)
     ratio_fringe = (distorted_dist[fringe_mask] - smoke_radius) / (fringe_radius - smoke_radius)
     prob_fringe = 0.15 * (1 - ratio_fringe) ** 3
-    brightness_fringe = (120 * (1 - ratio_fringe) * perlin[fringe_mask]).clip(0, 255).astype(np.uint8)
+    brightness_fringe = (
+        120 * (1 - ratio_fringe) * perlin[fringe_mask] * brightness_scale * grain_factor[fringe_mask]
+    ).clip(0, 255).astype(np.uint8)
     fringe_drawn = perlin[fringe_mask] > (1 - prob_fringe)
     region[fringe_mask] = np.where(
         fringe_drawn,

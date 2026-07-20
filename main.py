@@ -28,7 +28,7 @@ from canvas import (
     draw_center,
     distribute_centers_in_quadrilateral,
 )
-from smoke import draw_smoke
+from smoke import draw_smoke, sample_brightness_scale
 from landslide import draw_landslides
 from trajectories import draw_trajectories
 from export import tensor_to_image, mask_to_rgb
@@ -53,21 +53,26 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     quad = generate_quadrilateral(height, width, rng)
     origin = centroid_of_polygon(quad)
 
+    # Escala de brillo global de esta explosión: compartida entre los centros
+    # camuflados y el humo, para que ninguno sature a blanco pleno y el
+    # camuflaje siga funcionando (ver smoke.py::sample_brightness_scale).
+    brightness_scale = sample_brightness_scale(rng)
+
     # Centro principal de la explosión
     center_size = rng.integers(1, 3)
-    draw_center(tensor, origin, center_size, rng, mask)
+    draw_center(tensor, origin, center_size, rng, mask, brightness_scale=brightness_scale)
 
     # Centros secundarios distribuidos dentro del cuadrilátero (simulan fragmentos)
     num_centers = rng.integers(40, 80)
     centers = distribute_centers_in_quadrilateral(quad, num_centers, rng)
 
     for center in centers:
-        draw_center(tensor, center, rng.integers(0, 2), rng, mask)
+        draw_center(tensor, center, rng.integers(0, 2), rng, mask, brightness_scale=brightness_scale)
 
     # Humo: radio proporcional al tamaño del lienzo
     base_length = min(height, width) * rng.uniform(0.25, 0.40)
     smoke_radius = base_length * rng.uniform(0.15, 0.3)
-    draw_smoke(tensor, centers, smoke_radius, rng, mask)
+    draw_smoke(tensor, centers, smoke_radius, rng, mask, brightness_scale=brightness_scale)
 
     # Trayectorias de metralla (rectas + parabólicas de ida y vuelta + arcos
     # de sobrevuelo, fragmentos grandes que vuelan por encima de la nube)
