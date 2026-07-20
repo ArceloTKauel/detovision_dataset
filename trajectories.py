@@ -104,9 +104,22 @@ def _sample_trajectory_width(rng: np.random.Generator) -> int:
     return int(rng.choice(_TRAJECTORY_WIDTH_VALUES, p=_TRAJECTORY_WIDTH_PROBS))
 
 
-def _paint_trajectory_pixel(tensor: np.ndarray, py: int, px: int, brightness: int, width: int) -> None:
+def _paint_trajectory_pixel(
+    tensor: np.ndarray,
+    py: int,
+    px: int,
+    brightness: int,
+    width: int,
+    mask: np.ndarray | None = None,
+    camouflage_scale: float = 1.0,
+) -> None:
     """Pinta un punto de trayectoria como un bloque de `width` x `width`
     píxeles centrado en (py, px), mezclando por máximo y clipeado al lienzo.
+
+    Si se pasa mask, cada píxel del bloque que ya es humo (clase 1) se
+    atenúa con camouflage_scale antes de mezclar, para que la trayectoria se
+    camufle dentro del humo (oscurecido, ver smoke.py) en vez de sobresalir
+    a brillo pleno. Fuera del humo el brillo no se toca.
     """
     h, w = tensor.shape
     for dy in _WIDTH_OFFSETS[width]:
@@ -117,7 +130,10 @@ def _paint_trajectory_pixel(tensor: np.ndarray, py: int, px: int, brightness: in
             nx = px + dx
             if not (0 <= nx < w):
                 continue
-            tensor[ny, nx] = max(tensor[ny, nx], brightness)
+            pixel_brightness = brightness
+            if mask is not None and mask[ny, nx] == 1:
+                pixel_brightness = int(brightness * camouflage_scale)
+            tensor[ny, nx] = max(tensor[ny, nx], pixel_brightness)
 
 
 def _stamp_heatmap(
@@ -193,6 +209,7 @@ def draw_trajectory(
     erase_prob: float = 0.0,
     erase_frac_range: tuple[float, float] = (0.01, 0.05),
     heatmap: np.ndarray | None = None,
+    camouflage_scale: float = 1.0,
 ) -> None:
     """
     Dibuja una trayectoria recta punteada desde center en la dirección angle.
@@ -200,6 +217,8 @@ def draw_trajectory(
     cerca = denso, lejos = disperso. Simula desaceleración de metralla.
     erase_prob: probabilidad por oportunidad de dibujo de activar un borrado.
     erase_frac_range: (min, max) fracción del largo total a borrar por sección.
+    camouflage_scale: atenuación aplicada a los píxeles que caen sobre humo
+    (ver _paint_trajectory_pixel), misma escala global de smoke.py.
     """
     h, w = tensor.shape
     cy, cx = center
@@ -241,7 +260,7 @@ def draw_trajectory(
             if rng.random() < 0.7:
                 if 0 <= py < h and 0 <= px < w:
                     brightness = _trajectory_brightness(rng, brightness_mean)
-                    _paint_trajectory_pixel(tensor, py, px, brightness, width)
+                    _paint_trajectory_pixel(tensor, py, px, brightness, width, mask, camouflage_scale)
                     pixels_drawn += 1
             burst_remaining -= 1
             continue
@@ -255,7 +274,7 @@ def draw_trajectory(
             else:
                 if 0 <= py < h and 0 <= px < w:
                     brightness = _trajectory_brightness(rng, brightness_mean)
-                    _paint_trajectory_pixel(tensor, py, px, brightness, width)
+                    _paint_trajectory_pixel(tensor, py, px, brightness, width, mask, camouflage_scale)
                     pixels_drawn += 1
 
                 # Iniciar ráfaga de 1-3 píxeles consecutivos
@@ -326,6 +345,7 @@ def draw_returning_parabola(
     min_visible_fraction: float = 0.0,
     max_attempts: int = 20,
     max_spacing: float = 50.0,
+    camouflage_scale: float = 1.0,
 ) -> None:
     """
     Dibuja una trayectoria en forma de lazo/óvalo que parte de `start`
@@ -417,7 +437,7 @@ def draw_returning_parabola(
                 if rng.random() < 0.7:
                     if 0 <= spy < h and 0 <= spx < w:
                         brightness = _trajectory_brightness(rng, brightness_mean)
-                        _paint_trajectory_pixel(tensor, spy, spx, brightness, width)
+                        _paint_trajectory_pixel(tensor, spy, spx, brightness, width, mask, camouflage_scale)
                         pixels_drawn += 1
                 burst_remaining -= 1
                 continue
@@ -431,7 +451,7 @@ def draw_returning_parabola(
                 else:
                     if 0 <= spy < h and 0 <= spx < w:
                         brightness = _trajectory_brightness(rng, brightness_mean)
-                        _paint_trajectory_pixel(tensor, spy, spx, brightness, width)
+                        _paint_trajectory_pixel(tensor, spy, spx, brightness, width, mask, camouflage_scale)
                         pixels_drawn += 1
 
                     burst_remaining = rng.integers(0, 3)
@@ -476,6 +496,7 @@ def draw_flyover_trajectory(
     reach_range: tuple[float, float] = (0.2, 0.45),
     aspect_range: tuple[float, float] = (0.25, 0.55),
     height_factor_range: tuple[float, float] = (1.2, 1.8),
+    camouflage_scale: float = 1.0,
 ) -> None:
     """
     Dibuja una trayectoria en forma de arco abierto (medio lazo) que parte de
@@ -570,7 +591,7 @@ def draw_flyover_trajectory(
                 if rng.random() < 0.7:
                     if 0 <= spy < h and 0 <= spx < w:
                         brightness = _trajectory_brightness(rng, brightness_mean)
-                        _paint_trajectory_pixel(tensor, spy, spx, brightness, width)
+                        _paint_trajectory_pixel(tensor, spy, spx, brightness, width, mask, camouflage_scale)
                         pixels_drawn += 1
                 burst_remaining -= 1
                 continue
@@ -584,7 +605,7 @@ def draw_flyover_trajectory(
                 else:
                     if 0 <= spy < h and 0 <= spx < w:
                         brightness = _trajectory_brightness(rng, brightness_mean)
-                        _paint_trajectory_pixel(tensor, spy, spx, brightness, width)
+                        _paint_trajectory_pixel(tensor, spy, spx, brightness, width, mask, camouflage_scale)
                         pixels_drawn += 1
 
                     burst_remaining = rng.integers(0, 3)
@@ -621,6 +642,7 @@ def draw_straight_trajectories(
     rng: np.random.Generator,
     mask: np.ndarray | None = None,
     heatmap: np.ndarray | None = None,
+    camouflage_scale: float = 1.0,
 ) -> None:
     """Genera múltiples trayectorias rectas desde centros aleatorios."""
     h, w = tensor.shape
@@ -643,7 +665,8 @@ def draw_straight_trajectories(
         else:
             erase_prob = 0.0
             frac_lo, frac_hi = 0.0, 0.0
-        draw_trajectory(tensor, center, angle, length, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap)
+        draw_trajectory(tensor, center, angle, length, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap,
+                         camouflage_scale)
 
 
 # Fracción mínima de trayectorias parabólicas que deben quedar mayormente
@@ -666,6 +689,7 @@ def draw_parabolic_trajectories(
     rng: np.random.Generator,
     mask: np.ndarray | None = None,
     heatmap: np.ndarray | None = None,
+    camouflage_scale: float = 1.0,
 ) -> None:
     """
     Genera múltiples trayectorias en forma de lazo/óvalo: cada una parte de
@@ -692,7 +716,7 @@ def draw_parabolic_trajectories(
         min_visible = MIN_VISIBLE_FRACTION if i < num_contained else 0.0
         max_spacing = rng.uniform(*PARABOLA_MAX_SPACING_RANGE)
         draw_returning_parabola(tensor, start, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap,
-                                 min_visible, max_spacing=max_spacing)
+                                 min_visible, max_spacing=max_spacing, camouflage_scale=camouflage_scale)
 
 
 def draw_flyover_trajectories(
@@ -703,6 +727,7 @@ def draw_flyover_trajectories(
     rng: np.random.Generator,
     mask: np.ndarray | None = None,
     heatmap: np.ndarray | None = None,
+    camouflage_scale: float = 1.0,
 ) -> None:
     """Genera trayectorias de arco abierto que sobrevuelan la nube de humo."""
     for _ in range(num_trajectories):
@@ -718,7 +743,7 @@ def draw_flyover_trajectories(
 
         max_spacing = rng.uniform(*PARABOLA_MAX_SPACING_RANGE)
         draw_flyover_trajectory(tensor, start, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap,
-                                 max_spacing=max_spacing)
+                                 max_spacing=max_spacing, camouflage_scale=camouflage_scale)
 
 
 def draw_trajectories(
@@ -731,8 +756,9 @@ def draw_trajectories(
     mask: np.ndarray | None = None,
     heatmap: np.ndarray | None = None,
     num_flyover: int = 0,
+    camouflage_scale: float = 1.0,
 ) -> None:
     """Punto de entrada: dibuja trayectorias rectas, parabólicas y de sobrevuelo."""
-    draw_straight_trajectories(tensor, centers, origin, num_straight, rng, mask, heatmap)
-    draw_parabolic_trajectories(tensor, centers, origin, num_parabolic, rng, mask, heatmap)
-    draw_flyover_trajectories(tensor, centers, origin, num_flyover, rng, mask, heatmap)
+    draw_straight_trajectories(tensor, centers, origin, num_straight, rng, mask, heatmap, camouflage_scale)
+    draw_parabolic_trajectories(tensor, centers, origin, num_parabolic, rng, mask, heatmap, camouflage_scale)
+    draw_flyover_trajectories(tensor, centers, origin, num_flyover, rng, mask, heatmap, camouflage_scale)

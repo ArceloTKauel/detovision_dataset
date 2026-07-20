@@ -79,7 +79,8 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     num_straight = rng.integers(15, 30)
     num_parabolic = rng.integers(15, 30)
     num_flyover = rng.integers(1, 4)
-    draw_trajectories(tensor, centers, origin, num_straight, num_parabolic, rng, mask, heatmap, num_flyover)
+    draw_trajectories(tensor, centers, origin, num_straight, num_parabolic, rng, mask, heatmap, num_flyover,
+                       camouflage_scale=brightness_scale)
 
     # Derrumbe: franjas de desprendimiento independientes de la explosión,
     # aproximadamente paralelas entre sí, con puntos de inicio propios
