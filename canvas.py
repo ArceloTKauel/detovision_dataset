@@ -87,31 +87,39 @@ def draw_center(
                     mask[ny, nx] = 1
 
 
-# Rango de brillo del fondo: los píxeles que quedan en negro puro (0) al
-# final del pipeline se rellenan con ruido dentro de este rango, para que el
-# fondo se vea gris oscuro granulado en vez de negro plano, sin llegar a gris
-# claro/blanco. Se aplica al final (ver apply_background_noise) porque el 0
-# se usa como centinela de "nada dibujado todavía" durante la generación
-# (measure_smoke_width en smoke.py, sync de mask en main.py).
-_BACKGROUND_BRIGHTNESS_RANGE = (5, 30)
+# Grano de fondo: calibrado contra los heatmaps de diferencia de video reales
+# sin binarizar (detovision_segmentation/inference/inputs/mascara_cambios_final_sinbin_*.png),
+# donde el fondo mide media ~6-15 y desvío ~1.5-5 por parche, sin apenas nada
+# por encima de ~30-40, y 0.000% de los píxeles en negro puro (mínimo real
+# observado: 1) en las 6 imágenes de referencia. Media y desvío se sortean
+# una vez por imagen (no por píxel) para que la textura varíe de una
+# explosión a otra, igual que brightness_scale en smoke.py.
+_BACKGROUND_MEAN_RANGE = (6.0, 15.0)
+_BACKGROUND_STD_RANGE = (1.5, 5.0)
+_BACKGROUND_MAX = 40
 
 
 def apply_background_noise(
     tensor: np.ndarray,
     rng: np.random.Generator,
-    brightness_range: tuple[int, int] = _BACKGROUND_BRIGHTNESS_RANGE,
 ) -> None:
     """
-    Reemplaza cada píxel en negro puro (0) por un valor aleatorio independiente
-    dentro de brightness_range, dándole al fondo una textura granulada de gris
-    oscuro en vez de negro plano. Debe llamarse al final del pipeline, cuando
-    ya no queda ninguna lógica que dependa de detectar 0 como "sin dibujar".
+    Reemplaza cada píxel en negro puro (0) por ruido gaussiano (media/desvío
+    sorteados una vez por imagen dentro de _BACKGROUND_MEAN_RANGE/_STD_RANGE,
+    recortado a [1, _BACKGROUND_MAX] — el piso en 1, no 0, para que ningún
+    píxel de fondo quede en negro puro, igual que en las imágenes reales de
+    referencia), dándole al fondo grano de gris oscuro en vez de negro plano.
+    Debe llamarse al final del pipeline, cuando ya no queda ninguna lógica
+    que dependa de detectar 0 como "sin dibujar" (measure_smoke_width en
+    smoke.py, sync de mask en main.py).
     """
     zero_mask = tensor == 0
     n = int(zero_mask.sum())
     if n:
-        low, high = brightness_range
-        tensor[zero_mask] = rng.integers(low, high + 1, size=n)
+        mean = rng.uniform(*_BACKGROUND_MEAN_RANGE)
+        std = rng.uniform(*_BACKGROUND_STD_RANGE)
+        noise = rng.normal(mean, std, size=n)
+        tensor[zero_mask] = np.clip(noise, 1, _BACKGROUND_MAX).astype(np.uint8)
 
 
 def distribute_centers_in_quadrilateral(
