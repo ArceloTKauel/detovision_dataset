@@ -87,40 +87,6 @@ def draw_center(
                     mask[ny, nx] = 1
 
 
-# Grano de fondo: calibrado contra los heatmaps de diferencia de video reales
-# sin binarizar (detovision_segmentation/inference/inputs/mascara_cambios_final_sinbin_*.png),
-# medido a mano con pixel_inspector_gui.py. Rango objetivo de la clase fondo:
-# 1 a 20. Media y desvío se sortean una vez por imagen (no por píxel) para
-# que la textura varíe de una explosión a otra, igual que brightness_scale
-# en smoke.py.
-_BACKGROUND_MEAN_RANGE = (7.0, 14.0)
-_BACKGROUND_STD_RANGE = (2.0, 4.0)
-_BACKGROUND_MAX = 20
-
-
-def apply_background_noise(
-    tensor: np.ndarray,
-    rng: np.random.Generator,
-) -> None:
-    """
-    Reemplaza cada píxel en negro puro (0) por ruido gaussiano (media/desvío
-    sorteados una vez por imagen dentro de _BACKGROUND_MEAN_RANGE/_STD_RANGE,
-    recortado a [1, _BACKGROUND_MAX] — el piso en 1, no 0, para que ningún
-    píxel de fondo quede en negro puro, igual que en las imágenes reales de
-    referencia), dándole al fondo grano de gris oscuro en vez de negro plano.
-    Debe llamarse al final del pipeline, cuando ya no queda ninguna lógica
-    que dependa de detectar 0 como "sin dibujar" (measure_smoke_width en
-    smoke.py, sync de mask en main.py).
-    """
-    zero_mask = tensor == 0
-    n = int(zero_mask.sum())
-    if n:
-        mean = rng.uniform(*_BACKGROUND_MEAN_RANGE)
-        std = rng.uniform(*_BACKGROUND_STD_RANGE)
-        noise = rng.normal(mean, std, size=n)
-        tensor[zero_mask] = np.clip(noise, 1, _BACKGROUND_MAX).astype(np.uint8)
-
-
 def distribute_centers_in_quadrilateral(
     vertices: np.ndarray,
     num_points: int,
