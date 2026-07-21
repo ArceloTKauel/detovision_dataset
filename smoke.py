@@ -12,6 +12,10 @@ Funciones:
       determinar la zona, y Perlin noise para distorsionar radios y variar
       brillo. Si se pasa mask, marca los píxeles de humo como clase 1
       (y borra de la mask donde caen las manchas sustractivas).
+    - draw_white_blobs(tensor, smoke_radius, rng, mask): Dibuja sub-nubes de
+      "humo blanco" (piso de brillo 130) reutilizando draw_smoke sobre un
+      centro y radio más chicos, simulando metralla/brasas incandescentes
+      agrupadas. Se llama después de draw_smoke.
     - measure_smoke_width(tensor, origin, angle): Mide la distancia desde el
       origen en una dirección dada hasta encontrar un píxel negro. Usado por
       trajectories.py para que las trayectorias empiecen fuera del humo.
@@ -46,6 +50,22 @@ _SMOKE_BRIGHTNESS_FLOOR = 15
 _HOT_FLECK_PROB = 0.01
 _HOT_FLECK_RANGE = (200, 255)
 
+# Blobs de humo blanco: sub-nubes de metralla/brasas incandescentes dentro del
+# humo, reutilizando draw_smoke (mismas zonas core/mid/outer/fringe + Perlin)
+# sobre un centro y radio más chicos, en vez de un patrón ad hoc. El piso de
+# brillo alto (_WHITE_BLOB_BRIGHTNESS_FLOOR) es lo que las distingue del humo
+# gris normal: incluso la zona fringe (la de probabilidad más baja) nunca cae
+# por debajo de 130, así que el borde disperso del blob queda como racimo de
+# puntos brillantes en vez de humo gris tenue (ver referencia
+# mascara_cambios_final_sinbin_1.png). Independiente de brightness_scale del
+# humo principal, igual que los flecos: deben resaltar aunque la explosión
+# haya salido "apagada".
+_WHITE_BLOB_PROB = 0.7
+_WHITE_BLOB_COUNT_RANGE = (1, 2)
+_WHITE_BLOB_RADIUS_RATIO = (0.35, 0.6)  # fracción de smoke_radius
+_WHITE_BLOB_SCALE_RANGE = (0.7, 1.0)  # análogo a brightness_scale, cercano a blanco
+_WHITE_BLOB_BRIGHTNESS_FLOOR = 130
+
 
 def sample_brightness_scale(rng: np.random.Generator) -> float:
     """Sortea la escala de brillo global de una explosión (una vez por imagen)."""
@@ -59,7 +79,17 @@ def draw_smoke(
     rng: np.random.Generator,
     mask: np.ndarray | None = None,
     brightness_scale: float = 1.0,
+    brightness_floor: int = _SMOKE_BRIGHTNESS_FLOOR,
+    include_extras: bool = True,
 ) -> None:
+    """
+    brightness_floor: piso de brillo aplicado al clip de cada zona (ver
+        _SMOKE_BRIGHTNESS_FLOOR). draw_white_blobs reusa esta función con un
+        piso más alto para generar sub-nubes de "humo blanco".
+    include_extras: si es False, omite flecos brillantes y manchas
+        sustractivas (pensado para llamadas anidadas, como las de
+        draw_white_blobs, donde esos efectos ya los aporta el humo principal).
+    """
     h, w = tensor.shape
 
     all_cy = np.array([c[0] for c in centers], dtype=np.float64)
@@ -119,7 +149,7 @@ def draw_smoke(
     core_mask = distorted_dist < seam_lo
     core_brightness = (
         255 * (0.85 + perlin_fine[core_mask] * 0.15) * brightness_scale * grain_factor[core_mask]
-    ).clip(_SMOKE_BRIGHTNESS_FLOOR, 255).astype(np.uint8)
+    ).clip(brightness_floor, 255).astype(np.uint8)
     region[core_mask] = np.maximum(region[core_mask], core_brightness)
     if mask_region is not None:
         mask_region[core_mask] = 1
@@ -131,7 +161,7 @@ def draw_smoke(
     perlin_seam = perlin_fine[seam_mask] * (1 - t) + perlin[seam_mask] * t
     seam_brightness = (
         255 * (1 - 0.3 * t) * (0.85 + perlin_seam * 0.15) * brightness_scale * grain_factor[seam_mask]
-    ).clip(_SMOKE_BRIGHTNESS_FLOOR, 255).astype(np.uint8)
+    ).clip(brightness_floor, 255).astype(np.uint8)
     region[seam_mask] = np.maximum(region[seam_mask], seam_brightness)
     if mask_region is not None:
         mask_region[seam_mask] = 1
@@ -144,7 +174,7 @@ def draw_smoke(
     prob_mid = 0.9 - 0.4 * ratio_mid  # probabilidad de 90% a 50%
     brightness_mid = (
         255 * (1 - ratio_mid * 0.3) * (0.7 + perlin[mid_mask] * 0.3) * brightness_scale * grain_factor[mid_mask]
-    ).clip(_SMOKE_BRIGHTNESS_FLOOR, 255).astype(np.uint8)
+    ).clip(brightness_floor, 255).astype(np.uint8)
     mid_drawn = perlin[mid_mask] > (1 - prob_mid)
     region[mid_mask] = np.where(
         mid_drawn,
@@ -162,7 +192,7 @@ def draw_smoke(
     prob_outer = 0.6 * (1 - ratio_outer) ** 2
     brightness_outer = (
         200 * (1 - ratio_outer * 0.7) * (0.6 + perlin[outer_mask] * 0.4) * brightness_scale * grain_factor[outer_mask]
-    ).clip(_SMOKE_BRIGHTNESS_FLOOR, 255).astype(np.uint8)
+    ).clip(brightness_floor, 255).astype(np.uint8)
     outer_drawn = perlin[outer_mask] > (1 - prob_outer)
     region[outer_mask] = np.where(
         outer_drawn,
@@ -180,7 +210,7 @@ def draw_smoke(
     prob_fringe = 0.15 * (1 - ratio_fringe) ** 3
     brightness_fringe = (
         120 * (1 - ratio_fringe) * perlin[fringe_mask] * brightness_scale * grain_factor[fringe_mask]
-    ).clip(_SMOKE_BRIGHTNESS_FLOOR, 255).astype(np.uint8)
+    ).clip(brightness_floor, 255).astype(np.uint8)
     fringe_drawn = perlin[fringe_mask] > (1 - prob_fringe)
     region[fringe_mask] = np.where(
         fringe_drawn,
@@ -191,62 +221,101 @@ def draw_smoke(
         fringe_indices = np.argwhere(fringe_mask)
         mask_region[fringe_indices[fringe_drawn, 0], fringe_indices[fringe_drawn, 1]] = 1
 
-    # === FLECOS BRILLANTES (chispas raras cercanas a blanco pleno) ===
-    # Aplicado sobre el humo ya dibujado (todas las zonas), independiente de
-    # brightness_scale a propósito: es la única vía para que un píxel de
-    # humo llegue cerca de 255 aunque esta explosión haya salido "apagada".
-    smoke_so_far = region > 0
-    fleck_roll = rng.random(region.shape)
-    fleck_mask = smoke_so_far & (fleck_roll < _HOT_FLECK_PROB)
-    if fleck_mask.any():
-        fleck_brightness = rng.uniform(*_HOT_FLECK_RANGE, size=int(fleck_mask.sum())).astype(np.uint8)
-        region[fleck_mask] = np.maximum(region[fleck_mask], fleck_brightness)
+    if include_extras:
+        # === FLECOS BRILLANTES (chispas raras cercanas a blanco pleno) ===
+        # Aplicado sobre el humo ya dibujado (todas las zonas), independiente de
+        # brightness_scale a propósito: es la única vía para que un píxel de
+        # humo llegue cerca de 255 aunque esta explosión haya salido "apagada".
+        smoke_so_far = region > 0
+        fleck_roll = rng.random(region.shape)
+        fleck_mask = smoke_so_far & (fleck_roll < _HOT_FLECK_PROB)
+        if fleck_mask.any():
+            fleck_brightness = rng.uniform(*_HOT_FLECK_RANGE, size=int(fleck_mask.sum())).astype(np.uint8)
+            region[fleck_mask] = np.maximum(region[fleck_mask], fleck_brightness)
 
-    # === MANCHAS SUSTRACTIVAS (polígonos que recortan huecos en el humo) ===
-    # Se generan en zonas donde el Perlin sustractivo es bajo (< 0.45),
-    # evitando el core central para no romper la forma base.
-    subtractive = perlin_noise_2d(
-        (region_h, region_w), scale=smoke_radius * 0.3, rng=rng, octaves=3
-    )
-    smoke_mask = region > 0
-    candidate_mask = (subtractive < 0.45) & smoke_mask
-    candidate_mask &= distorted_dist > core_radius * 0.5  # proteger el core
+        # === MANCHAS SUSTRACTIVAS (polígonos que recortan huecos en el humo) ===
+        # Se generan en zonas donde el Perlin sustractivo es bajo (< 0.45),
+        # evitando el core central para no romper la forma base.
+        subtractive = perlin_noise_2d(
+            (region_h, region_w), scale=smoke_radius * 0.3, rng=rng, octaves=3
+        )
+        smoke_mask = region > 0
+        candidate_mask = (subtractive < 0.45) & smoke_mask
+        candidate_mask &= distorted_dist > core_radius * 0.5  # proteger el core
 
-    candidate_coords = np.argwhere(candidate_mask)
-    if len(candidate_coords) > 0:
-        num_polys = min(len(candidate_coords), rng.integers(15, 45))
-        seed_indices = rng.choice(len(candidate_coords), size=num_polys, replace=False)
-        seeds = candidate_coords[seed_indices]
+        candidate_coords = np.argwhere(candidate_mask)
+        if len(candidate_coords) > 0:
+            num_polys = min(len(candidate_coords), rng.integers(15, 45))
+            seed_indices = rng.choice(len(candidate_coords), size=num_polys, replace=False)
+            seeds = candidate_coords[seed_indices]
 
-        # Dibujar polígonos en una imagen auxiliar para luego aplicar como máscara
-        poly_img = Image.new("L", (region_w, region_h), 0)
-        draw = ImageDraw.Draw(poly_img)
+            # Dibujar polígonos en una imagen auxiliar para luego aplicar como máscara
+            poly_img = Image.new("L", (region_w, region_h), 0)
+            draw = ImageDraw.Draw(poly_img)
 
-        for seed in seeds:
-            sy, sx = seed
-            dist = distorted_dist[sy, sx]
-            # Polígonos más pequeños cerca del core, más grandes lejos
-            core_factor = float(np.clip(dist / (core_radius * 2), 0.2, 1.0))
+            for seed in seeds:
+                sy, sx = seed
+                dist = distorted_dist[sy, sx]
+                # Polígonos más pequeños cerca del core, más grandes lejos
+                core_factor = float(np.clip(dist / (core_radius * 2), 0.2, 1.0))
 
-            # Polígono irregular: vértices a ángulos ordenados con radio variable
-            num_verts = rng.integers(4, 14)
-            angles = np.sort(rng.uniform(0, 2 * np.pi, size=num_verts))
-            base_r = smoke_radius * rng.uniform(0.1, 0.3) * core_factor
+                # Polígono irregular: vértices a ángulos ordenados con radio variable
+                num_verts = rng.integers(4, 14)
+                angles = np.sort(rng.uniform(0, 2 * np.pi, size=num_verts))
+                base_r = smoke_radius * rng.uniform(0.1, 0.3) * core_factor
 
-            verts = []
-            for a in angles:
-                r = base_r * rng.uniform(0.6, 1.0)  # variación del radio por vértice
-                vy = sy + r * np.sin(a)
-                vx = sx + r * np.cos(a)
-                verts.append((int(round(vx)), int(round(vy))))
+                verts = []
+                for a in angles:
+                    r = base_r * rng.uniform(0.6, 1.0)  # variación del radio por vértice
+                    vy = sy + r * np.sin(a)
+                    vx = sx + r * np.cos(a)
+                    verts.append((int(round(vx)), int(round(vy))))
 
-            draw.polygon(verts, fill=255)
+                draw.polygon(verts, fill=255)
 
-        # Aplicar máscara: donde hay polígono, borrar el humo
-        poly_array = np.array(poly_img)
-        region[poly_array > 0] = 0
-        if mask_region is not None:
-            mask_region[poly_array > 0] = 0
+            # Aplicar máscara: donde hay polígono, borrar el humo
+            poly_array = np.array(poly_img)
+            region[poly_array > 0] = 0
+            if mask_region is not None:
+                mask_region[poly_array > 0] = 0
+
+
+def draw_white_blobs(
+    tensor: np.ndarray,
+    smoke_radius: float,
+    rng: np.random.Generator,
+    mask: np.ndarray | None = None,
+) -> None:
+    """
+    Dibuja una o más sub-nubes de "humo blanco" dentro del humo ya trazado,
+    reutilizando draw_smoke sobre un centro y radio más chicos, con un piso
+    de brillo alto (130) y sin sus propios flecos/manchas sustractivas
+    (include_extras=False). Hereda la misma textura orgánica (zonas
+    core/mid/outer/fringe + distorsión Perlin) que el humo normal, pero
+    funciona como núcleo incandescente en vez de gris, simulando metralla o
+    brasas agrupadas. No hace nada si el tensor no tiene humo dibujado o si
+    el sorteo de probabilidad no activa el blob en esta explosión.
+    """
+    smoke_coords = np.argwhere(tensor > 0)
+    if len(smoke_coords) == 0 or rng.random() > _WHITE_BLOB_PROB:
+        return
+
+    num_blobs = rng.integers(*_WHITE_BLOB_COUNT_RANGE, endpoint=True)
+    for _ in range(num_blobs):
+        cy, cx = smoke_coords[rng.integers(len(smoke_coords))]
+        blob_radius = smoke_radius * rng.uniform(*_WHITE_BLOB_RADIUS_RATIO)
+        blob_scale = rng.uniform(*_WHITE_BLOB_SCALE_RANGE)
+
+        draw_smoke(
+            tensor,
+            [(int(cy), int(cx))],
+            blob_radius,
+            rng,
+            mask=mask,
+            brightness_scale=blob_scale,
+            brightness_floor=_WHITE_BLOB_BRIGHTNESS_FLOOR,
+            include_extras=False,
+        )
 
 
 def measure_smoke_width(

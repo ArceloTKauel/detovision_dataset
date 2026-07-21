@@ -28,7 +28,7 @@ from canvas import (
     draw_center,
     distribute_centers_in_quadrilateral,
 )
-from smoke import draw_smoke, sample_brightness_scale
+from smoke import draw_smoke, sample_brightness_scale, draw_white_blobs
 from landslide import draw_landslides
 from trajectories import draw_trajectories
 from export import tensor_to_image, mask_to_rgb
@@ -73,6 +73,10 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     base_length = min(height, width) * rng.uniform(0.25, 0.40)
     smoke_radius = base_length * rng.uniform(0.15, 0.3)
     draw_smoke(tensor, centers, smoke_radius, rng, mask, brightness_scale=brightness_scale)
+
+    # Blobs de chispas: racimos de puntos brillantes (130-255) concentrados en
+    # una zona acotada del humo, simulando metralla incandescente agrupada.
+    draw_white_blobs(tensor, smoke_radius, rng, mask)
 
     # Trayectorias de metralla (rectas + parabólicas de ida y vuelta + arcos
     # de sobrevuelo, fragmentos grandes que vuelan por encima de la nube)
