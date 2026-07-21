@@ -3,8 +3,9 @@ main.py - Punto de entrada del generador de dataset sintético de explosiones.
 
 Orquesta el pipeline completo de generación en un solo pase: crea el lienzo,
 genera la zona de impacto (cuadrilátero), distribuye centros de metralla,
-dibuja el humo con textura Perlin, traza franjas de derrumbe (opcional) y
-trayectorias rectas y parabólicas, y produce simultáneamente dos salidas:
+dibuja el humo con textura Perlin (más sub-nubes de humo blanco simulando
+brasas), traza franjas de derrumbe (opcional) y trayectorias rectas y
+parabólicas, y produce simultáneamente dos salidas:
     - Imagen en escala de grises (entrada del dataset): el humo queda en
       gradiente continuo (más intenso cerca del centro de la explosión, más
       tenue hacia el borde). Las trayectorias por ahora siguen dibujándose
@@ -74,8 +75,9 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     smoke_radius = base_length * rng.uniform(0.15, 0.3)
     draw_smoke(tensor, centers, smoke_radius, rng, mask, brightness_scale=brightness_scale)
 
-    # Blobs de chispas: racimos de puntos brillantes (130-255) concentrados en
-    # una zona acotada del humo, simulando metralla incandescente agrupada.
+    # Sub-nubes de "humo blanco": reutiliza draw_smoke sobre un centro y radio
+    # más chicos con piso de brillo alto, simulando metralla/brasas
+    # incandescentes agrupadas dentro del humo (ver smoke.py::draw_white_blobs).
     draw_white_blobs(tensor, smoke_radius, rng, mask)
 
     # Trayectorias de metralla (rectas + parabólicas de ida y vuelta + arcos
