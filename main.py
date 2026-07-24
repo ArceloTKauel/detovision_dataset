@@ -32,6 +32,7 @@ from canvas import (
 from smoke import draw_smoke, sample_brightness_scale, draw_white_blobs
 from landslide import draw_landslides
 from trajectories import draw_trajectories
+from terrain import draw_terrain
 from export import tensor_to_image, mask_to_rgb
 
 HEIGHT = 512
@@ -49,6 +50,14 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     tensor = create_canvas(height, width)
     mask = np.zeros((height, width), dtype=np.uint8)
     heatmap = np.zeros((height, width), dtype=np.uint8)
+
+    # Manchón de parallax de terreno (ego-motion de cámara): se dibuja PRIMERO,
+    # sobre el lienzo todavía vacío, para que humo/trayectoria/derrumbe lo
+    # ocluyan de forma natural al dibujarse encima (ver terrain.py). No toca
+    # `mask` — el resto de las funciones ya marcan su propia clase de forma
+    # incondicional dentro de su geometría, así que el terreno solo queda como
+    # fondo donde nada más lo cubre.
+    draw_terrain(tensor, rng)
 
     # Zona de impacto: cuadrilátero aleatorio con su centroide como origen
     quad = generate_quadrilateral(height, width, rng)
