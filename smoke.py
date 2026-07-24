@@ -222,13 +222,23 @@ def draw_smoke(
         mask_region[fringe_indices[fringe_drawn, 0], fringe_indices[fringe_drawn, 1]] = 1
 
     if include_extras:
+        # smoke_so_far / smoke_mask deben restringirse al humo real (mask_region
+        # == 1), no a `region > 0`: la región de trabajo puede incluir textura de
+        # terreno (draw_terrain, dibujado antes con np.maximum) que no tiene
+        # nada que ver con el humo. Sin esta distinción, tanto los flecos como
+        # las manchas sustractivas de más abajo terminan operando sobre terreno
+        # ajeno al humo — los flecos lo salpican de chispas sin sentido y las
+        # manchas lo perforan a negro puro, rompiendo la continuidad de las
+        # líneas de terreno alrededor de la explosión. Si no hay mask, no hay
+        # forma de distinguir humo de terreno y se cae de vuelta a `region > 0`.
+        real_smoke_mask = mask_region == 1 if mask_region is not None else region > 0
+
         # === FLECOS BRILLANTES (chispas raras cercanas a blanco pleno) ===
         # Aplicado sobre el humo ya dibujado (todas las zonas), independiente de
         # brightness_scale a propósito: es la única vía para que un píxel de
         # humo llegue cerca de 255 aunque esta explosión haya salido "apagada".
-        smoke_so_far = region > 0
         fleck_roll = rng.random(region.shape)
-        fleck_mask = smoke_so_far & (fleck_roll < _HOT_FLECK_PROB)
+        fleck_mask = real_smoke_mask & (fleck_roll < _HOT_FLECK_PROB)
         if fleck_mask.any():
             fleck_brightness = rng.uniform(*_HOT_FLECK_RANGE, size=int(fleck_mask.sum())).astype(np.uint8)
             region[fleck_mask] = np.maximum(region[fleck_mask], fleck_brightness)
@@ -239,8 +249,7 @@ def draw_smoke(
         subtractive = perlin_noise_2d(
             (region_h, region_w), scale=smoke_radius * 0.3, rng=rng, octaves=3
         )
-        smoke_mask = region > 0
-        candidate_mask = (subtractive < 0.45) & smoke_mask
+        candidate_mask = (subtractive < 0.45) & real_smoke_mask
         candidate_mask &= distorted_dist > core_radius * 0.5  # proteger el core
 
         candidate_coords = np.argwhere(candidate_mask)
@@ -273,11 +282,16 @@ def draw_smoke(
 
                 draw.polygon(verts, fill=255)
 
-            # Aplicar máscara: donde hay polígono, borrar el humo
+            # Aplicar máscara: donde hay polígono Y es humo real, borrar. El
+            # polígono puede sobresalir un poco más allá de real_smoke_mask
+            # (el radio se sortea independiente de la forma del humo); sin este
+            # segundo filtro, ese sobrante perfora terreno vecino en vez de
+            # limitarse al humo.
             poly_array = np.array(poly_img)
-            region[poly_array > 0] = 0
+            erase_mask = (poly_array > 0) & real_smoke_mask
+            region[erase_mask] = 0
             if mask_region is not None:
-                mask_region[poly_array > 0] = 0
+                mask_region[erase_mask] = 0
 
 
 def draw_white_blobs(
