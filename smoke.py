@@ -293,10 +293,21 @@ def draw_white_blobs(
     (include_extras=False). Hereda la misma textura orgánica (zonas
     core/mid/outer/fringe + distorsión Perlin) que el humo normal, pero
     funciona como núcleo incandescente en vez de gris, simulando metralla o
-    brasas agrupadas. No hace nada si el tensor no tiene humo dibujado o si
-    el sorteo de probabilidad no activa el blob en esta explosión.
+    brasas agrupadas. No hace nada si no hay humo dibujado o si el sorteo de
+    probabilidad no activa el blob en esta explosión.
+
+    El centro se sortea entre píxeles de clase humo (mask == 1) en vez de
+    `tensor > 0`: draw_terrain pinta textura de fondo con brillo bajo sobre
+    buena parte del lienzo ANTES de que exista humo real, así que `tensor >
+    0` también incluye terreno lejano. Sortear sobre ese conjunto podía
+    plantar un blob (piso de brillo 130, marcado como clase humo) a cientos
+    de píxeles de la explosión. Si no se pasa mask, no hay forma de
+    distinguir humo de terreno y se cae de vuelta a `tensor > 0`.
     """
-    smoke_coords = np.argwhere(tensor > 0)
+    if mask is not None:
+        smoke_coords = np.argwhere(mask == 1)
+    else:
+        smoke_coords = np.argwhere(tensor > 0)
     if len(smoke_coords) == 0 or rng.random() > _WHITE_BLOB_PROB:
         return
 
