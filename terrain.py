@@ -50,9 +50,20 @@ TERRAIN_VANISHING_MARGIN = 1.5
 
 # ── Manchón: el campo se usa directo como brillo, modulado en bandas suaves ─
 TERRAIN_BAND_PERIOD   = (0.04, 0.12)
-TERRAIN_BLOTCH_FLOOR  = (0.35, 0.60)
 TERRAIN_BLOTCH_MAX_VAL = (15, 55)
 TERRAIN_BLUR_RADIUS   = (0.3, 0.8)
+
+# Piso de la banda (fracción del período que queda "apagada"): en vez de un
+# escalar único por imagen, se modula con un campo de baja frecuencia para
+# que convivan zonas de banda ancha (floor bajo) y zonas de banda fina (floor
+# alto) dentro del mismo cuadro, sin cambiar la forma/espaciado de las ondas.
+TERRAIN_BLOTCH_FLOOR_RANGE     = (0.35, 0.90)
+TERRAIN_FLOOR_FIELD_OCTAVES    = (2, 3)
+TERRAIN_FLOOR_FIELD_CELL_RANGE = (150.0, 320.0)
+# Veces que se aplica smoothstep al campo: empuja los valores hacia los
+# extremos (zona fina / zona ancha bien diferenciadas) manteniendo la
+# transición suave entre ambas, en vez de quedarse en grises intermedios.
+TERRAIN_FLOOR_FIELD_CONTRAST_PASSES = 2
 
 # Grano fibroso de alta frecuencia, multiplicado sobre la banda.
 TERRAIN_GRAIN_OCTAVES    = (3, 5)
@@ -63,11 +74,15 @@ TERRAIN_GRAIN_CONTRAST   = (0.5, 0.9)
 TERRAIN_INTENSITY_RANGE = (0.05, 1.0)
 
 
-def _multi_octave_field(h, w, octaves_range, cell_range, rng):
+def _multi_octave_field(h, w, octaves_range, cell_range, rng, resample=Image.BILINEAR):
     """Campo [h, w] de ruido fractal multi-octava — misma técnica que
     _multi_octave_field en detovision_segmentation/utils/dataset.py, portada a
     `rng.random` en vez de `np.random.rand` (estado global) para que la
-    generación quede determinada por el seed por índice de generate_dataset.py."""
+    generación quede determinada por el seed por índice de generate_dataset.py.
+
+    `resample` permite pedir BICUBIC cuando la grilla base es muy chica (pocas
+    celdas): con BILINEAR el estirado deja costuras rectas horizontales y
+    verticales en los bordes de celda, visibles como quiebres antinaturales."""
     octaves = rng.integers(*octaves_range, endpoint=True)
     base_cell = rng.uniform(*cell_range)
 
@@ -78,7 +93,7 @@ def _multi_octave_field(h, w, octaves_range, cell_range, rng):
         grid_h = max(2, round(h / cell))
         grid_w = max(2, round(w / cell))
         small = rng.random((grid_h, grid_w)).astype(np.float32)
-        layer = np.array(Image.fromarray(small).resize((w, h), Image.BILINEAR))
+        layer = np.array(Image.fromarray(small).resize((w, h), resample))
         field += layer * amplitude
         total_amplitude += amplitude
         amplitude *= 0.5
@@ -117,6 +132,22 @@ def _terrain_grain_multiplier(h, w, rng):
     return 1.0 - contrast + 2.0 * contrast * field
 
 
+def _terrain_floor_field(h, w, rng):
+    """Campo [h, w] en [0, 1] que module el piso de banda espacialmente —
+    valor alto en una zona da bandas finas ahí, valor bajo da bandas más
+    anchas, para que ambos "tipos" convivan dentro de la misma imagen.
+
+    Usa BICUBIC (la grilla base son pocas celdas, ver _multi_octave_field) y
+    remata con smoothstep para que las dos zonas queden bien diferenciadas en
+    vez de promediarse en un gris intermedio."""
+    field = _multi_octave_field(h, w, TERRAIN_FLOOR_FIELD_OCTAVES, TERRAIN_FLOOR_FIELD_CELL_RANGE,
+                                rng, resample=Image.BICUBIC)
+    field = _stretch_to_unit_range(field)
+    for _ in range(TERRAIN_FLOOR_FIELD_CONTRAST_PASSES):
+        field = field * field * (3.0 - 2.0 * field)
+    return field
+
+
 def _terrain_blotch_brightness(h, w, rng):
     """Mapa de brillo [0, 255] con bandas suaves (modulación seno) + piso +
     grano fibroso + intensidad global — ver _fake_terrain_blotch_brightness en
@@ -129,8 +160,9 @@ def _terrain_blotch_brightness(h, w, rng):
     phase = rng.uniform(0, 2 * np.pi)
     banding = 0.5 + 0.5 * np.sin(2 * np.pi * normalized / period + phase)
 
-    floor = rng.uniform(*TERRAIN_BLOTCH_FLOOR)
-    banding = np.clip((banding - floor) / (1.0 - floor), 0.0, 1.0)
+    floor_lo, floor_hi = TERRAIN_BLOTCH_FLOOR_RANGE
+    floor_field = floor_lo + (floor_hi - floor_lo) * _terrain_floor_field(h, w, rng)
+    banding = np.clip((banding - floor_field) / (1.0 - floor_field), 0.0, 1.0)
 
     banding = np.clip(banding * _terrain_grain_multiplier(h, w, rng), 0.0, 1.0)
 
