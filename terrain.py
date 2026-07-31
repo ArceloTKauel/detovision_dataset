@@ -57,7 +57,14 @@ TERRAIN_BLUR_RADIUS   = (0.3, 0.8)
 # escalar único por imagen, se modula con un campo de baja frecuencia para
 # que convivan zonas de banda ancha (floor bajo) y zonas de banda fina (floor
 # alto) dentro del mismo cuadro, sin cambiar la forma/espaciado de las ondas.
-TERRAIN_BLOTCH_FLOOR_RANGE     = (0.35, 0.90)
+#
+# El rango está calibrado contra las máscaras reales: medido como p95 de 2*EDT
+# sobre los píxeles encendidos y a 768x512 (el tamaño que ve el modelo), las
+# referencias dan ~19 px de ancho de línea. Con (0.35, 0.90) salían 27.5 px,
+# ~1.4x más anchas; este rango las deja en 19.5 px. Es el lever correcto para
+# afinar porque no toca el período, o sea que la forma y el espaciado de las
+# ondas quedan igual.
+TERRAIN_BLOTCH_FLOOR_RANGE     = (0.65, 0.96)
 TERRAIN_FLOOR_FIELD_OCTAVES    = (2, 3)
 TERRAIN_FLOOR_FIELD_CELL_RANGE = (150.0, 320.0)
 # Veces que se aplica smoothstep al campo: empuja los valores hacia los
@@ -69,6 +76,28 @@ TERRAIN_FLOOR_FIELD_CONTRAST_PASSES = 2
 TERRAIN_GRAIN_OCTAVES    = (3, 5)
 TERRAIN_GRAIN_CELL_RANGE = (4.0, 12.0)
 TERRAIN_GRAIN_CONTRAST   = (0.5, 0.9)
+
+# ── Cortes en las bandas finas ─────────────────────────────────────────────
+# Las líneas finas de las referencias reales son discontinuas, no un trazo
+# continuo. Un campo de ruido aparte borra parte de la banda; el umbral se
+# escala por el mismo campo de floor, así que las zonas anchas (floor bajo)
+# quedan intactas y solo se cortan las finas. El grano fibroso no sirve para
+# esto: promedia varias octavas, se concentra cerca de 0.5 y nunca llega a
+# valores lo bastante bajos como para apagar un píxel.
+#
+# Qué banda se puede cortar se decide por su ancho REAL en píxeles, no por el
+# campo de floor: `floor_norm` se normaliza por imagen, así que siempre hay un
+# tercio "más fino que el resto" aunque en píxeles siga siendo ancho — el ancho
+# real depende también del período de banda. Cortar por floor deja agujeros
+# negros en medio de bandas anchas, que no se leen como línea discontinua sino
+# como defecto. La apertura morfológica sí mide ancho absoluto: una banda más
+# gruesa que ~2*RADIUS+1 px sobrevive intacta (con sus bordes) y queda
+# protegida, mientras que una fina desaparece en la erosión y es cortable.
+TERRAIN_DASH_STRENGTH    = 0.65
+TERRAIN_DASH_THIN_RADIUS = 3
+TERRAIN_DASH_LIT_LEVEL   = 0.15
+TERRAIN_DASH_OCTAVES     = (2, 3)
+TERRAIN_DASH_CELL_RANGE  = (5.0, 16.0)
 
 # Intensidad global por muestra.
 TERRAIN_INTENSITY_RANGE = (0.05, 1.0)
@@ -132,6 +161,27 @@ def _terrain_grain_multiplier(h, w, rng):
     return 1.0 - contrast + 2.0 * contrast * field
 
 
+def _terrain_dash_cut(h, w, rng, banding):
+    """Máscara booleana de píxeles a apagar para cortar en segmentos las bandas
+    finas, dejando intactas las anchas — ver TERRAIN_DASH_STRENGTH.
+
+    La apertura (erosión seguida de dilatación) se hace repitiendo MinFilter/
+    MaxFilter de 3x3: equivale a un kernel de 2*RADIUS+1 y es bastante más
+    rápido que pedirle a PIL ese kernel de una."""
+    dash = _stretch_to_unit_range(
+        _multi_octave_field(h, w, TERRAIN_DASH_OCTAVES, TERRAIN_DASH_CELL_RANGE, rng))
+
+    lit = banding > TERRAIN_DASH_LIT_LEVEL
+    opened = Image.fromarray((lit * 255).astype(np.uint8))
+    for _ in range(TERRAIN_DASH_THIN_RADIUS):
+        opened = opened.filter(ImageFilter.MinFilter(3))
+    for _ in range(TERRAIN_DASH_THIN_RADIUS):
+        opened = opened.filter(ImageFilter.MaxFilter(3))
+
+    thin = lit & ~(np.array(opened) > 127)
+    return (dash < TERRAIN_DASH_STRENGTH) & thin
+
+
 def _terrain_floor_field(h, w, rng):
     """Campo [h, w] en [0, 1] que module el piso de banda espacialmente —
     valor alto en una zona da bandas finas ahí, valor bajo da bandas más
@@ -165,6 +215,9 @@ def _terrain_blotch_brightness(h, w, rng):
     banding = np.clip((banding - floor_field) / (1.0 - floor_field), 0.0, 1.0)
 
     banding = np.clip(banding * _terrain_grain_multiplier(h, w, rng), 0.0, 1.0)
+
+    # Las bandas que quedaron finas se cortan en segmentos; las anchas no.
+    banding[_terrain_dash_cut(h, w, rng, banding)] = 0.0
 
     intensity = rng.uniform(*TERRAIN_INTENSITY_RANGE)
     max_val = rng.uniform(*TERRAIN_BLOTCH_MAX_VAL) * intensity
