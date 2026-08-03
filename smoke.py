@@ -359,13 +359,17 @@ _FILAMENT_MASK_LEVEL   = 14.0
 # ejemplos de esa ambigüedad. Ni 0 (no la aprende) ni 1 (deja de haber
 # periferia fibrosa de humo). Ver [[project_smoke_filaments]].
 _FILAMENT_TRAJECTORY_FRAC = 0.12
-# Piso del heatmap para los píxeles reclasificados a trayectoria: el heatmap
-# de trajectories.py siempre pica en 255 vía su kernel gaussiano, independiente
-# de brightness_scale (que solo aplica al tensor/camuflaje). Sin un piso
-# análogo acá, la punta de una estría larga (donde density cae a casi 0 por el
-# falloff) queda con un heatmap casi 0 — técnicamente no negro puro, pero
-# visualmente indistinguible ([0,0,6] medido).
-_FILAMENT_HEATMAP_FLOOR = 60.0
+# Piso del heatmap para los píxeles reclasificados a trayectoria. OJO: esto no
+# es solo estético. detovision_segmentation/utils/dataset.py usa el canal azul
+# directo como target BLANDO de CrossEntropyLoss (`trayectoria_np = B/255`), no
+# como una máscara binaria — es la probabilidad que el modelo aprende a
+# predecir ahí. Las trayectorias reales (trajectories.py::_HEATMAP_KERNEL)
+# pican en 255 (~100% de confianza) en toda su longitud. Un piso bajo (se
+# probó 60 ≈ 23%) le enseña al modelo una trayectoria "tibia" justo en los
+# píxeles que se querían reforzar — señal de entrenamiento débil, no un
+# problema de visualización. El piso tiene que quedar en el mismo orden que
+# las trayectorias reales para que la señal sea comparable.
+_FILAMENT_HEATMAP_FLOOR = 220.0
 
 
 def draw_smoke_filaments(
