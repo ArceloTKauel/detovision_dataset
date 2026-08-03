@@ -24,12 +24,16 @@ import numpy as np
 
 from canvas import (
     create_canvas,
-    generate_quadrilateral,
-    centroid_of_polygon,
+    generate_blast_line,
     draw_center,
-    distribute_centers_in_quadrilateral,
+    distribute_centers_along_line,
 )
-from smoke import draw_smoke, sample_brightness_scale, draw_white_blobs
+from smoke import (
+    draw_smoke,
+    sample_brightness_scale,
+    draw_white_blobs,
+    draw_smoke_filaments,
+)
 from landslide import draw_landslides
 from trajectories import draw_trajectories
 from terrain import draw_terrain
@@ -59,9 +63,12 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     # fondo donde nada más lo cubre.
     draw_terrain(tensor, rng)
 
-    # Zona de impacto: cuadrilátero aleatorio con su centroide como origen
-    quad = generate_quadrilateral(height, width, rng)
-    origin = centroid_of_polygon(quad)
+    # Zona de impacto: la fila de pozos cargados (ver canvas.py), con su punto
+    # medio como origen. Antes era un cuadrilátero, que daba una pluma
+    # redondeada; la carga real es lineal y por eso la pluma sale alargada.
+    blast_line = generate_blast_line(height, width, rng)
+    mid = blast_line[len(blast_line) // 2]
+    origin = (int(round(mid[0])), int(round(mid[1])))
 
     # Escala de brillo global de esta explosión: compartida entre los centros
     # camuflados y el humo, para que ninguno sature a blanco pleno y el
@@ -72,9 +79,9 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     center_size = rng.integers(1, 3)
     draw_center(tensor, origin, center_size, rng, mask, brightness_scale=brightness_scale)
 
-    # Centros secundarios distribuidos dentro del cuadrilátero (simulan fragmentos)
+    # Centros secundarios repartidos a lo largo de la línea (simulan fragmentos)
     num_centers = rng.integers(40, 80)
-    centers = distribute_centers_in_quadrilateral(quad, num_centers, rng)
+    centers = distribute_centers_along_line(blast_line, num_centers, rng)
 
     for center in centers:
         draw_center(tensor, center, rng.integers(0, 2), rng, mask, brightness_scale=brightness_scale)
@@ -87,7 +94,17 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     # Sub-nubes de "humo blanco": reutiliza draw_smoke sobre un centro y radio
     # más chicos con piso de brillo alto, simulando metralla/brasas
     # incandescentes agrupadas dentro del humo (ver smoke.py::draw_white_blobs).
+    # Va ANTES de los filamentos: sortea su centro entre los píxeles ya
+    # marcados como humo, así que si los filamentos ya estuvieran marcados
+    # podría plantar el blob sobre una estría lejana y fina, desprendido de la
+    # nube. Mismo problema que tuvo con el terreno en su momento.
     draw_white_blobs(tensor, smoke_radius, rng, mask)
+
+    # Periferia filamentosa: estrías radiales desde la línea de tiro. Va después
+    # de draw_smoke porque sus manchas sustractivas perforan todo lo que esté
+    # marcado como humo (ver smoke.py::draw_smoke_filaments).
+    draw_smoke_filaments(tensor, blast_line, smoke_radius, rng, mask,
+                         brightness_scale=brightness_scale)
 
     # Trayectorias de metralla (rectas + parabólicas de ida y vuelta + arcos
     # de sobrevuelo, fragmentos grandes que vuelan por encima de la nube)
