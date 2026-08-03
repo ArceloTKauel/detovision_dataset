@@ -12,9 +12,6 @@ Funciones:
       determinar la zona, y Perlin noise para distorsionar radios y variar
       brillo. Si se pasa mask, marca los píxeles de humo como clase 1
       (y borra de la mask donde caen las manchas sustractivas).
-    - draw_smoke_filaments(tensor, line, smoke_radius, rng, mask): Dibuja la
-      periferia filamentosa — estrías que irradian desde la línea de tiro. Es
-      lo que draw_smoke no puede dar por construcción (ver _FILAMENT_*).
     - draw_white_blobs(tensor, smoke_radius, rng, mask): Dibuja sub-nubes de
       "humo blanco" (piso de brillo 130) reutilizando draw_smoke sobre un
       centro y radio más chicos, simulando metralla/brasas incandescentes
@@ -25,9 +22,8 @@ Funciones:
 """
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw
 
-from canvas import sample_on_line
 from perlin_noise import perlin_noise_2d
 
 # Escala de brillo global de la explosión: sortea una vez por imagen (en
@@ -296,152 +292,6 @@ def draw_smoke(
             region[erase_mask] = 0
             if mask_region is not None:
                 mask_region[erase_mask] = 0
-
-
-# ── Filamentos radiales ────────────────────────────────────────────────────
-# El humo real no es un blob liso: son miles de estrías finas que irradian desde
-# la línea de tiro (polvo y escombro con motion blur). draw_smoke no puede
-# producirlas ni con otros parámetros — está construido como zonas de distancia,
-# o sea f(min_dist), y por lo tanto no tiene noción de dirección: la isotropía
-# es estructural. Estas partículas-estría aportan esa textura, y como salen de
-# una línea y no de un punto, la pluma queda alargada sola.
-#
-# Se dibujan DESPUÉS de draw_smoke a propósito: sus manchas sustractivas operan
-# sobre `mask_region == 1`, así que si los filamentos ya estuvieran marcados,
-# los perforaría también.
-_FILAMENT_COUNT_RANGE  = (1400, 3200)
-# Arranque de la estría, en fracción de smoke_radius: NO puede ser 0. Si todas
-# salen desde la línea misma, la densidad se apila ahí y el núcleo revienta a
-# blanco puro, tapando toda la estructura. Repartir los arranques sobre un
-# anillo distribuye el depósito y deja el núcleo para draw_smoke.
-_FILAMENT_START_RATIO  = (0.10, 1.00)
-_FILAMENT_LENGTH_RATIO = (0.40, 3.00)    # fracción de smoke_radius
-_FILAMENT_LENGTH_SKEW  = 1.8             # >1 sesga a estrías cortas, con cola larga
-_FILAMENT_BRIGHTNESS   = (60.0, 190.0)
-_FILAMENT_FALLOFF_EXP  = 1.5             # cómo se apaga la estría hacia la punta
-_FILAMENT_CURL         = 0.30            # deriva angular: las estrías no son rectas
-# Sin esto la pluma irradia 360° parejo y sale un diente de león. Las reales son
-# abanicos volcados hacia un lado (el material sale contra la cara del banco, y
-# la gravedad y el viento hacen el resto). Escala el largo de la estría según su
-# ángulo respecto de una dirección preferente sorteada por imagen: el largo va
-# de (1-A) a (1+A) veces el nominal.
-_FILAMENT_ANISOTROPY   = 0.65
-# El ensanchado tiene que ser PERPENDICULAR a la estría, no isótropo. Con
-# dispersión isótropa + blur (0.6/0.6) también se difumina a lo largo, la estría
-# se vuelve pelusa y la coherencia de orientación cae de 0.307 a 0.234. Pero
-# dejarlo en 0 da líneas duras de un píxel: eso mete demasiada energía de alta
-# frecuencia y aleja la pendiente espectral de la de las referencias (-1.92
-# contra -2.18). Ensanchar solo en perpendicular da ancho y suavidad sin perder
-# la estructura lineal — que es lo que hace el motion blur real.
-# 2.2 px medido sobre 30 semillas: es el único valor probado que mejora las DOS
-# métricas a la vez respecto de no tener filamentos (coherencia 0.242 -> 0.274,
-# y la pendiente espectral queda a 0.02 del objetivo en vez de a 0.04). Con
-# 0.9 px la coherencia sube más (0.302) pero la pendiente se va a -1.90 contra
-# -2.18 de las referencias, o sea se gana textura metiendo ruido de alta
-# frecuencia que las reales no tienen.
-_FILAMENT_WIDTH_PX     = 2.2
-_FILAMENT_WIDTH_OFFSETS = np.array([-1.0, 0.0, 1.0])
-_FILAMENT_WIDTH_WEIGHTS = np.array([0.6, 1.0, 0.6])
-_FILAMENT_BLUR         = 0.0
-# El acumulador se renormaliza por su propio percentil 99 a este nivel, en vez
-# de depender de las constantes de arriba: así cambiar cantidad o largo altera
-# la FORMA de la pluma sin volver a saturarla, que es lo que pasaba antes.
-_FILAMENT_PEAK_LEVEL   = 205.0
-# Umbral de DENSIDAD (no de brillo) para marcar clase humo. Se aplica sobre el
-# acumulador ya renormalizado y antes de brightness_scale, así que la máscara no
-# se mueve si la explosión sale más clara o más apagada.
-_FILAMENT_MASK_LEVEL   = 14.0
-
-
-def draw_smoke_filaments(
-    tensor: np.ndarray,
-    line: np.ndarray,
-    smoke_radius: float,
-    rng: np.random.Generator,
-    mask: np.ndarray | None = None,
-    brightness_scale: float = 1.0,
-) -> None:
-    """Dibuja la periferia filamentosa del humo: estrías que irradian desde
-    puntos sorteados sobre la línea de tiro `line` (ver canvas.py).
-
-    Cada estría se rasteriza muestreando a lo largo de su recorrido. La cantidad
-    de muestras se escala con el radio para que queden a menos de un píxel una
-    de otra (si no, la estría sale punteada), y la amplitud por muestra se
-    corrige por `largo / muestras` para que el brillo depositado por píxel no
-    dependa del largo de la estría.
-    """
-    h, w = tensor.shape
-    count = int(rng.integers(*_FILAMENT_COUNT_RANGE))
-
-    origins = sample_on_line(line, count, rng)
-    angles = rng.uniform(0, 2 * np.pi, size=count)
-    base = rng.uniform(*_FILAMENT_BRIGHTNESS, size=count)
-    curl = rng.normal(0, _FILAMENT_CURL, size=count)
-
-    start = smoke_radius * rng.uniform(*_FILAMENT_START_RATIO, size=count)
-    lo, hi = _FILAMENT_LENGTH_RATIO
-    lengths = smoke_radius * (lo + (hi - lo) * rng.random(count) ** _FILAMENT_LENGTH_SKEW)
-
-    # Anisotropía AXIAL alineada con la línea de tiro: cos(2*Δ) alarga las
-    # estrías en ambos sentidos del eje de la línea y las acorta perpendicular,
-    # con lo que la pluma se estira SOBRE la línea. Con una dirección preferente
-    # sorteada al azar (cos(Δ), como estaba antes) el halo radiaba parejo y
-    # redondeaba la pluma: la elongación caía de 1.88 a 1.34 contra 1.92 de las
-    # referencias. Así se recupera la forma sin tener que acortar las estrías,
-    # que es lo que costaba textura.
-    axis_vec = line[-1] - line[0]
-    axis = np.arctan2(axis_vec[0], axis_vec[1])
-    lengths *= (1.0 - _FILAMENT_ANISOTROPY
-                + _FILAMENT_ANISOTROPY * (1.0 + np.cos(2.0 * (angles - axis))))
-
-    samples = int(np.clip(smoke_radius * 2.5, 48, 256))
-    t = np.linspace(0.0, 1.0, samples)[None, :]
-
-    a = angles[:, None] + curl[:, None] * t
-    r = start[:, None] + lengths[:, None] * t
-    ys = origins[:, 0:1] + r * np.sin(a)
-    xs = origins[:, 1:2] + r * np.cos(a)
-
-    amp = base[:, None] * (1.0 - t) ** _FILAMENT_FALLOFF_EXP * (lengths[:, None] / samples)
-
-    # Grosor: réplicas PARALELAS de la misma estría, desplazadas sobre su normal
-    # (la dirección de avance es (sin a, cos a) en (y, x), así que la normal es
-    # (cos a, -sin a)). El desplazamiento es constante a lo largo de cada
-    # réplica: si se sortea por muestra, la estría zigzaguea y pierde la
-    # orientación que es justamente lo que aporta — medido, la coherencia cae de
-    # 0.306 a 0.220. Ver _FILAMENT_WIDTH_PX.
-    offs = _FILAMENT_WIDTH_OFFSETS * _FILAMENT_WIDTH_PX
-    ys = ys[..., None] + offs * np.cos(a)[..., None]
-    xs = xs[..., None] - offs * np.sin(a)[..., None]
-    amp = amp[..., None] * _FILAMENT_WIDTH_WEIGHTS
-
-    yi = np.round(ys).astype(np.int64).ravel()
-    xi = np.round(xs).astype(np.int64).ravel()
-    inside = (yi >= 0) & (yi < h) & (xi >= 0) & (xi < w)
-    if not inside.any():
-        return
-
-    # bincount en índices aplanados: mucho más rápido que np.add.at con este
-    # volumen de muestras (cientos de miles por imagen).
-    density = np.bincount(
-        yi[inside] * w + xi[inside], weights=amp.ravel()[inside], minlength=h * w
-    ).reshape(h, w)
-
-    lit = density > 0
-    if not lit.any():
-        return
-    peak = float(np.percentile(density[lit], 99.0))
-    density *= _FILAMENT_PEAK_LEVEL / max(peak, 1e-6)
-
-    brightness = np.clip(density * brightness_scale, 0, 255).astype(np.uint8)
-    brightness = np.array(
-        Image.fromarray(brightness).filter(ImageFilter.GaussianBlur(_FILAMENT_BLUR))
-    )
-
-    drawn = density > _FILAMENT_MASK_LEVEL
-    np.maximum(tensor, np.where(drawn, brightness, 0), out=tensor)
-    if mask is not None:
-        mask[drawn] = 1
 
 
 def draw_white_blobs(
