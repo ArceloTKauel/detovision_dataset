@@ -351,6 +351,21 @@ _FILAMENT_PEAK_LEVEL   = 205.0
 # acumulador ya renormalizado y antes de brightness_scale, así que la máscara no
 # se mueve si la explosión sale más clara o más apagada.
 _FILAMENT_MASK_LEVEL   = 14.0
+# Fracción de estrías (no de píxeles) que se etiquetan como trayectoria (clase
+# 2) en vez de humo (clase 1): las de MAYOR alcance (start + length), no un
+# sorteo parejo. Motivo: en las predicciones del modelo entrenado con humo
+# fibroso, algunas de las estrías largas que salen del núcleo son indistintas
+# de metralla real — hoy el dataset le enseña que TODO filamento es humo, sin
+# ejemplos de esa ambigüedad. Ni 0 (no la aprende) ni 1 (deja de haber
+# periferia fibrosa de humo). Ver [[project_smoke_filaments]].
+_FILAMENT_TRAJECTORY_FRAC = 0.12
+# Piso del heatmap para los píxeles reclasificados a trayectoria: el heatmap
+# de trajectories.py siempre pica en 255 vía su kernel gaussiano, independiente
+# de brightness_scale (que solo aplica al tensor/camuflaje). Sin un piso
+# análogo acá, la punta de una estría larga (donde density cae a casi 0 por el
+# falloff) queda con un heatmap casi 0 — técnicamente no negro puro, pero
+# visualmente indistinguible ([0,0,6] medido).
+_FILAMENT_HEATMAP_FLOOR = 60.0
 
 
 def draw_smoke_filaments(
@@ -360,6 +375,7 @@ def draw_smoke_filaments(
     rng: np.random.Generator,
     mask: np.ndarray | None = None,
     brightness_scale: float = 1.0,
+    heatmap: np.ndarray | None = None,
 ) -> None:
     """Dibuja la periferia filamentosa del humo: estrías que irradian desde
     puntos sorteados sobre la línea de tiro `line` (ver canvas.py).
@@ -394,6 +410,14 @@ def draw_smoke_filaments(
     lengths *= (1.0 - _FILAMENT_ANISOTROPY
                 + _FILAMENT_ANISOTROPY * (1.0 + np.cos(2.0 * (angles - axis))))
 
+    # Etiqueta por estría (no por píxel): las de mayor alcance total
+    # (start + length) se marcan como candidatas a trayectoria. Se resuelve a
+    # nivel de píxel más abajo (density_traj vs density) porque muchas
+    # estrías se superponen en el mismo píxel y ahí sí puede haber mezcla.
+    reach = start + lengths
+    reach_cut = np.quantile(reach, 1.0 - _FILAMENT_TRAJECTORY_FRAC)
+    is_traj = reach >= reach_cut
+
     samples = int(np.clip(smoke_radius * 2.5, 48, 256))
     t = np.linspace(0.0, 1.0, samples)[None, :]
 
@@ -423,15 +447,15 @@ def draw_smoke_filaments(
 
     # bincount en índices aplanados: mucho más rápido que np.add.at con este
     # volumen de muestras (cientos de miles por imagen).
-    density = np.bincount(
-        yi[inside] * w + xi[inside], weights=amp.ravel()[inside], minlength=h * w
-    ).reshape(h, w)
+    flat_idx = yi[inside] * w + xi[inside]
+    density = np.bincount(flat_idx, weights=amp.ravel()[inside], minlength=h * w).reshape(h, w)
 
     lit = density > 0
     if not lit.any():
         return
     peak = float(np.percentile(density[lit], 99.0))
-    density *= _FILAMENT_PEAK_LEVEL / max(peak, 1e-6)
+    scale = _FILAMENT_PEAK_LEVEL / max(peak, 1e-6)
+    density *= scale
 
     brightness = np.clip(density * brightness_scale, 0, 255).astype(np.uint8)
     brightness = np.array(
@@ -441,7 +465,44 @@ def draw_smoke_filaments(
     drawn = density > _FILAMENT_MASK_LEVEL
     np.maximum(tensor, np.where(drawn, brightness, 0), out=tensor)
     if mask is not None:
-        mask[drawn] = 1
+        # Densidad aportada solo por las estrías candidatas a trayectoria,
+        # con la MISMA escala que density (misma normalización por peak), para
+        # poder comparar directamente. En píxeles donde varias estrías se
+        # superponen, la clase se decide por cuál aporta más de la mitad de la
+        # densidad ahí — así el núcleo (muchas estrías cortas de humo
+        # solapadas) se mantiene humo aunque alguna estría de trayectoria lo
+        # atraviese de paso hacia su punta.
+        is_traj_bc = np.broadcast_to(is_traj[:, None, None], amp.shape)
+        amp_traj = np.where(is_traj_bc, amp, 0.0)
+        density_traj = np.bincount(
+            flat_idx, weights=amp_traj.ravel()[inside], minlength=h * w
+        ).reshape(h, w)
+        density_traj *= scale
+
+        # Nunca DEGRADAR a trayectoria un píxel que draw_smoke/draw_center ya
+        # marcó como humo real (prioridad humo > trayectoria, igual que en el
+        # resto del pipeline): sin esto, una estría de trayectoria que de
+        # paso cruza el núcleo ya sólido podía bajarlo de clase 1 a clase 2.
+        already_humo = mask == 1
+        traj_dominant = density_traj > (density - density_traj)
+        new_traj = drawn & traj_dominant & ~already_humo
+        mask[drawn & ~new_traj] = 1
+        mask[new_traj] = 2
+
+        # export.py::mask_to_rgb pinta la clase trayectoria a partir de
+        # `heatmap > 0`, no de `mask == 2` directo (así funciona el gradiente
+        # real de las trayectorias). Sin esto, estos píxeles quedan con
+        # mask == 2 pero heatmap == 0: no matchean ninguna condición de color
+        # en mask_to_rgb y salen negro puro.
+        # Se usa `density` (no `brightness`) porque ya está normalizada a un
+        # peak fijo (_FILAMENT_PEAK_LEVEL) independiente de brightness_scale
+        # y del umbral de dibujo — brightness_scale es un concepto de tensor/
+        # camuflaje que no debe apagar la confianza del heatmap, igual que en
+        # trajectories.py. El piso evita que la punta de la estría (density
+        # apenas sobre el umbral de "dibujado") quede casi invisible.
+        if heatmap is not None:
+            heatmap_value = np.clip(density, _FILAMENT_HEATMAP_FLOOR, 255.0).astype(np.uint8)
+            heatmap[new_traj] = np.maximum(heatmap[new_traj], heatmap_value[new_traj])
 
 
 def draw_white_blobs(

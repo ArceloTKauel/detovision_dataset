@@ -104,7 +104,7 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     # de draw_smoke porque sus manchas sustractivas perforan todo lo que esté
     # marcado como humo (ver smoke.py::draw_smoke_filaments).
     draw_smoke_filaments(tensor, blast_line, smoke_radius, rng, mask,
-                         brightness_scale=brightness_scale)
+                         brightness_scale=brightness_scale, heatmap=heatmap)
 
     # Trayectorias de metralla (rectas + parabólicas de ida y vuelta + arcos
     # de sobrevuelo, fragmentos grandes que vuelan por encima de la nube)
