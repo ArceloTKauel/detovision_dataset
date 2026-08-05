@@ -13,8 +13,12 @@ _sample_trajectory_width) que se aplica a todos sus puntos.
 
 Todas las funciones aceptan un parámetro opcional mask: si se pasa, dibuja
 las trayectorias completas (todos los píxeles, sin spacing ni ráfagas) como
-clase 2, solo sobre píxeles de fondo (clase 0). La prioridad de clases en la
-máscara es humo > trayectoria > derrumbe > fondo.
+clase 2, sobre píxeles de fondo (clase 0). La prioridad de clases en la
+máscara es humo > trayectoria > derrumbe > fondo, con una excepción: sobre la
+periferia FILAMENTOSA del humo (`filament_region`, ver _SMOKE_OVERRIDE_PROB) la
+trayectoria pasa por encima y gana la etiqueta, que es como se ven los "pelos"
+de metralla en las referencias reales. Dentro del núcleo de la pluma sigue
+oculta.
 
 Funciones:
     - bresenham(y0, x0, y1, x1): Algoritmo de Bresenham para rasterizar una
@@ -105,6 +109,57 @@ def _sample_trajectory_width(rng: np.random.Generator) -> int:
     return int(rng.choice(_TRAJECTORY_WIDTH_VALUES, p=_TRAJECTORY_WIDTH_PROBS))
 
 
+# ── Trayectorias por encima de la periferia filamentosa ────────────────────
+# El humo tiene dos partes y la trayectoria se comporta distinto en cada una:
+#
+#   NÚCLEO (draw_center/draw_smoke/draw_white_blobs) — la trayectoria NACE ahí
+#   dentro y queda oculta: atenuada por camouflage_scale y etiquetada humo. Es
+#   la lógica de siempre y no cambia. El origen del fragmento no se ve, igual
+#   que en las referencias, donde la línea de tiro es una masa saturada sin
+#   pelos distinguibles adentro.
+#
+#   PERIFERIA FIBROSA (draw_smoke_filaments) — la trayectoria pasa POR ENCIMA:
+#   se ve y se etiqueta clase 2. En mascara_cambios_final_ESS_F04.png se ve
+#   clarísimo: los pelos punteados emergen de la masa central y cruzan el humo
+#   fibroso sin interrumpirse hasta salir al fondo negro.
+#
+# Qué píxel es cuál lo decide smoke.py::draw_smoke_filaments, que devuelve la
+# máscara de "humo solo por filamentos"; se propaga hasta acá como
+# `filament_region`. Sin esa distinción el pelo tallaría también el núcleo, que
+# es el modo de falla de v16 (partir la pluma en fragmentos de trayectoria).
+#
+# Esto reemplaza al intento de reclasificar estrías de humo al azar (ver nota
+# en smoke.py::_FILAMENT_MASK_LEVEL): acá el píxel clase 2 dentro del humo
+# SIEMPRE pertenece a una trayectoria que continúa fuera de la pluma, así que
+# la regla que aprende el modelo es geométrica y no un sorteo sobre una textura
+# idéntica.
+#
+# Medido en la referencia: el humo fibroso está en p50=42 / p90=61, y los
+# puntos de metralla que lo cruzan llegan a 140-177. O sea que el pelo no tiene
+# un brillo absoluto propio, sino que se lee POR CONTRASTE sobre el humo local
+# — de ahí que el piso sea relativo a tensor[ny, nx] y no un valor fijo.
+#
+# _SMOKE_OVERRIDE_PROB en 1.0: toda trayectoria que cruce la periferia fibrosa
+# se ve. Queda como constante y no cableado porque es la dosis del cambio, y
+# bajarlo es la forma de aflojarlo sin tocar la geometría.
+_SMOKE_OVERRIDE_PROB = 1.0
+_SMOKE_OVERRIDE_CONTRAST_RANGE = (35, 75)
+
+
+def _sample_smoke_override(rng: np.random.Generator) -> tuple[bool, int]:
+    """Sortea, una vez por trayectoria, si se ve por encima del humo y con
+    cuánto contraste sobre el humo local.
+
+    Consume siempre los dos sorteos, aunque el primero salga negativo, para que
+    cambiar _SMOKE_OVERRIDE_PROB no desplace el stream del rng: así dos
+    corridas con distinta dosis y la misma semilla comparten la geometría de
+    todas las trayectorias y la diferencia medida es solo el efecto del
+    override, no otra explosión distinta."""
+    hit = rng.random() < _SMOKE_OVERRIDE_PROB
+    contrast = int(rng.uniform(*_SMOKE_OVERRIDE_CONTRAST_RANGE))
+    return hit, (contrast if hit else 0)
+
+
 def _paint_trajectory_pixel(
     tensor: np.ndarray,
     py: int,
@@ -113,6 +168,8 @@ def _paint_trajectory_pixel(
     width: int,
     mask: np.ndarray | None = None,
     camouflage_scale: float = 1.0,
+    override_contrast: int = 0,
+    filament_region: np.ndarray | None = None,
 ) -> None:
     """Pinta un punto de trayectoria como un bloque de `width` x `width`
     píxeles centrado en (py, px), mezclando por máximo y clipeado al lienzo.
@@ -121,8 +178,16 @@ def _paint_trajectory_pixel(
     atenúa con camouflage_scale antes de mezclar, para que la trayectoria se
     camufle dentro del humo (oscurecido, ver smoke.py) en vez de sobresalir
     a brillo pleno. Fuera del humo el brillo no se toca.
+
+    override_contrast > 0 invierte ese comportamiento, pero SOLO sobre la
+    periferia fibrosa (filament_region): en vez de atenuarse, el píxel se lleva
+    a `humo local + override_contrast` cuando eso es más claro que su propio
+    brillo. Sin este piso relativo la mezcla por máximo lo borraría, porque el
+    brillo sorteado (2-100) casi siempre queda por debajo del humo. Sobre el
+    núcleo sigue camuflándose.
     """
     h, w = tensor.shape
+    over_filaments = override_contrast > 0 and filament_region is not None
     for dy in _WIDTH_OFFSETS[width]:
         ny = py + dy
         if not (0 <= ny < h):
@@ -133,7 +198,11 @@ def _paint_trajectory_pixel(
                 continue
             pixel_brightness = brightness
             if mask is not None and mask[ny, nx] == 1:
-                pixel_brightness = int(brightness * camouflage_scale)
+                if over_filaments and filament_region[ny, nx]:
+                    pixel_brightness = max(brightness,
+                                           min(255, int(tensor[ny, nx]) + override_contrast))
+                else:
+                    pixel_brightness = int(brightness * camouflage_scale)
             tensor[ny, nx] = max(tensor[ny, nx], pixel_brightness)
 
 
@@ -167,11 +236,27 @@ def _stamp_heatmap(
                 heatmap[ny, nx] = value
 
 
-def _paint_traj_mask(mask: np.ndarray, py: int, px: int, h: int, w: int) -> None:
+def _paint_traj_mask(mask: np.ndarray, py: int, px: int, h: int, w: int,
+                     over_smoke: bool = False,
+                     filament_region: np.ndarray | None = None) -> None:
+    """Marca clase 2 sobre fondo. Con over_smoke, también le gana al humo
+    (clase 1) pero solo donde ese humo es periferia fibrosa: sobre el núcleo la
+    trayectoria queda oculta, como siempre.
+
+    El heatmap se estampa DESPUÉS de esto en las tres funciones de dibujo, y
+    _stamp_heatmap sigue saltando los píxeles clase 1 — o sea que el gradiente
+    cae exactamente sobre los píxeles que acá pasaron a clase 2 y no se
+    derrama sobre el humo de al lado. Importa: export.py::mask_to_rgb pinta
+    azul TODO píxel con heatmap > 0, así que un derrame convertiría humo en
+    trayectoria en el target.
+    """
+    claim_smoke = over_smoke and filament_region is not None
     for dy in _MASK_OFFSETS:
         for dx in _MASK_OFFSETS:
             ny, nx = py + dy, px + dx
-            if 0 <= ny < h and 0 <= nx < w and mask[ny, nx] == 0:
+            if not (0 <= ny < h and 0 <= nx < w):
+                continue
+            if mask[ny, nx] == 0 or (claim_smoke and mask[ny, nx] == 1 and filament_region[ny, nx]):
                 mask[ny, nx] = 2
 
 
@@ -211,6 +296,7 @@ def draw_trajectory(
     erase_frac_range: tuple[float, float] = (0.01, 0.05),
     heatmap: np.ndarray | None = None,
     camouflage_scale: float = 1.0,
+    filament_region: np.ndarray | None = None,
 ) -> None:
     """
     Dibuja una trayectoria recta punteada desde center en la dirección angle.
@@ -236,6 +322,7 @@ def draw_trajectory(
     total_len = max(len(points), 1)
     brightness_mean = _sample_trajectory_brightness_mean(rng)
     width = _sample_trajectory_width(rng)
+    over_smoke, override_contrast = _sample_smoke_override(rng)
 
     pixels_since_draw = 0
     next_draw_at = 0
@@ -261,7 +348,8 @@ def draw_trajectory(
             if rng.random() < 0.7:
                 if 0 <= py < h and 0 <= px < w:
                     brightness = _trajectory_brightness(rng, brightness_mean)
-                    _paint_trajectory_pixel(tensor, py, px, brightness, width, mask, camouflage_scale)
+                    _paint_trajectory_pixel(tensor, py, px, brightness, width, mask, camouflage_scale,
+                                            override_contrast, filament_region)
                     pixels_drawn += 1
             burst_remaining -= 1
             continue
@@ -275,7 +363,8 @@ def draw_trajectory(
             else:
                 if 0 <= py < h and 0 <= px < w:
                     brightness = _trajectory_brightness(rng, brightness_mean)
-                    _paint_trajectory_pixel(tensor, py, px, brightness, width, mask, camouflage_scale)
+                    _paint_trajectory_pixel(tensor, py, px, brightness, width, mask, camouflage_scale,
+                                            override_contrast, filament_region)
                     pixels_drawn += 1
 
                 # Iniciar ráfaga de 1-3 píxeles consecutivos
@@ -294,7 +383,7 @@ def draw_trajectory(
     if mask is not None and pixels_drawn > 0:
         for py, px in points:
             if 0 <= py < h and 0 <= px < w:
-                _paint_traj_mask(mask, py, px, h, w)
+                _paint_traj_mask(mask, py, px, h, w, over_smoke, filament_region)
 
     # Heatmap: gradiente continuo sobre toda la línea (no solo los puntos dispersos)
     if heatmap is not None and pixels_drawn > 0:
@@ -347,6 +436,7 @@ def draw_returning_parabola(
     max_attempts: int = 20,
     max_spacing: float = 50.0,
     camouflage_scale: float = 1.0,
+    filament_region: np.ndarray | None = None,
 ) -> None:
     """
     Dibuja una trayectoria en forma de lazo/óvalo que parte de `start`
@@ -397,6 +487,7 @@ def draw_returning_parabola(
     total_len = max(num_steps, 1)
     brightness_mean = _sample_trajectory_brightness_mean(rng)
     width = _sample_trajectory_width(rng)
+    over_smoke, override_contrast = _sample_smoke_override(rng)
     prev_py, prev_px = int(round(sy)), int(round(sx))
     pixels_since_draw = 0
     next_draw_at = 0
@@ -438,7 +529,8 @@ def draw_returning_parabola(
                 if rng.random() < 0.7:
                     if 0 <= spy < h and 0 <= spx < w:
                         brightness = _trajectory_brightness(rng, brightness_mean)
-                        _paint_trajectory_pixel(tensor, spy, spx, brightness, width, mask, camouflage_scale)
+                        _paint_trajectory_pixel(tensor, spy, spx, brightness, width, mask, camouflage_scale,
+                                                override_contrast, filament_region)
                         pixels_drawn += 1
                 burst_remaining -= 1
                 continue
@@ -452,7 +544,8 @@ def draw_returning_parabola(
                 else:
                     if 0 <= spy < h and 0 <= spx < w:
                         brightness = _trajectory_brightness(rng, brightness_mean)
-                        _paint_trajectory_pixel(tensor, spy, spx, brightness, width, mask, camouflage_scale)
+                        _paint_trajectory_pixel(tensor, spy, spx, brightness, width, mask, camouflage_scale,
+                                                override_contrast, filament_region)
                         pixels_drawn += 1
 
                     burst_remaining = rng.integers(0, 3)
@@ -475,7 +568,7 @@ def draw_returning_parabola(
     if mask is not None and pixels_drawn > 0:
         for spy, spx in all_points:
             if 0 <= spy < h and 0 <= spx < w:
-                _paint_traj_mask(mask, spy, spx, h, w)
+                _paint_traj_mask(mask, spy, spx, h, w, over_smoke, filament_region)
 
     # Heatmap: gradiente continuo sobre todo el lazo (no solo los puntos dispersos)
     if heatmap is not None and pixels_drawn > 0:
@@ -498,6 +591,7 @@ def draw_flyover_trajectory(
     aspect_range: tuple[float, float] = (0.25, 0.55),
     height_factor_range: tuple[float, float] = (1.2, 1.8),
     camouflage_scale: float = 1.0,
+    filament_region: np.ndarray | None = None,
 ) -> None:
     """
     Dibuja una trayectoria en forma de arco abierto (medio lazo) que parte de
@@ -553,6 +647,7 @@ def draw_flyover_trajectory(
     total_len = max(num_steps, 1)
     brightness_mean = _sample_trajectory_brightness_mean(rng)
     width = _sample_trajectory_width(rng)
+    over_smoke, override_contrast = _sample_smoke_override(rng)
     prev_py, prev_px = int(round(sy)), int(round(sx))
     pixels_since_draw = 0
     next_draw_at = 0
@@ -592,7 +687,8 @@ def draw_flyover_trajectory(
                 if rng.random() < 0.7:
                     if 0 <= spy < h and 0 <= spx < w:
                         brightness = _trajectory_brightness(rng, brightness_mean)
-                        _paint_trajectory_pixel(tensor, spy, spx, brightness, width, mask, camouflage_scale)
+                        _paint_trajectory_pixel(tensor, spy, spx, brightness, width, mask, camouflage_scale,
+                                                override_contrast, filament_region)
                         pixels_drawn += 1
                 burst_remaining -= 1
                 continue
@@ -606,7 +702,8 @@ def draw_flyover_trajectory(
                 else:
                     if 0 <= spy < h and 0 <= spx < w:
                         brightness = _trajectory_brightness(rng, brightness_mean)
-                        _paint_trajectory_pixel(tensor, spy, spx, brightness, width, mask, camouflage_scale)
+                        _paint_trajectory_pixel(tensor, spy, spx, brightness, width, mask, camouflage_scale,
+                                                override_contrast, filament_region)
                         pixels_drawn += 1
 
                     burst_remaining = rng.integers(0, 3)
@@ -627,7 +724,7 @@ def draw_flyover_trajectory(
     if mask is not None and pixels_drawn > 0:
         for spy, spx in all_points:
             if 0 <= spy < h and 0 <= spx < w:
-                _paint_traj_mask(mask, spy, spx, h, w)
+                _paint_traj_mask(mask, spy, spx, h, w, over_smoke, filament_region)
 
     if heatmap is not None and pixels_drawn > 0:
         for spy, spx in all_points:
@@ -644,6 +741,7 @@ def draw_straight_trajectories(
     mask: np.ndarray | None = None,
     heatmap: np.ndarray | None = None,
     camouflage_scale: float = 1.0,
+    filament_region: np.ndarray | None = None,
 ) -> None:
     """Genera múltiples trayectorias rectas desde centros aleatorios."""
     h, w = tensor.shape
@@ -667,7 +765,7 @@ def draw_straight_trajectories(
             erase_prob = 0.0
             frac_lo, frac_hi = 0.0, 0.0
         draw_trajectory(tensor, center, angle, length, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap,
-                         camouflage_scale)
+                         camouflage_scale, filament_region)
 
 
 # Fracción mínima de trayectorias parabólicas que deben quedar mayormente
@@ -691,6 +789,7 @@ def draw_parabolic_trajectories(
     mask: np.ndarray | None = None,
     heatmap: np.ndarray | None = None,
     camouflage_scale: float = 1.0,
+    filament_region: np.ndarray | None = None,
 ) -> None:
     """
     Genera múltiples trayectorias en forma de lazo/óvalo: cada una parte de
@@ -717,7 +816,8 @@ def draw_parabolic_trajectories(
         min_visible = MIN_VISIBLE_FRACTION if i < num_contained else 0.0
         max_spacing = rng.uniform(*PARABOLA_MAX_SPACING_RANGE)
         draw_returning_parabola(tensor, start, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap,
-                                 min_visible, max_spacing=max_spacing, camouflage_scale=camouflage_scale)
+                                 min_visible, max_spacing=max_spacing, camouflage_scale=camouflage_scale,
+                                 filament_region=filament_region)
 
 
 def draw_flyover_trajectories(
@@ -729,6 +829,7 @@ def draw_flyover_trajectories(
     mask: np.ndarray | None = None,
     heatmap: np.ndarray | None = None,
     camouflage_scale: float = 1.0,
+    filament_region: np.ndarray | None = None,
 ) -> None:
     """Genera trayectorias de arco abierto que sobrevuelan la nube de humo."""
     for _ in range(num_trajectories):
@@ -744,7 +845,8 @@ def draw_flyover_trajectories(
 
         max_spacing = rng.uniform(*PARABOLA_MAX_SPACING_RANGE)
         draw_flyover_trajectory(tensor, start, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap,
-                                 max_spacing=max_spacing, camouflage_scale=camouflage_scale)
+                                 max_spacing=max_spacing, camouflage_scale=camouflage_scale,
+                                 filament_region=filament_region)
 
 
 def draw_trajectories(
@@ -758,8 +860,12 @@ def draw_trajectories(
     heatmap: np.ndarray | None = None,
     num_flyover: int = 0,
     camouflage_scale: float = 1.0,
+    filament_region: np.ndarray | None = None,
 ) -> None:
     """Punto de entrada: dibuja trayectorias rectas, parabólicas y de sobrevuelo."""
-    draw_straight_trajectories(tensor, centers, origin, num_straight, rng, mask, heatmap, camouflage_scale)
-    draw_parabolic_trajectories(tensor, centers, origin, num_parabolic, rng, mask, heatmap, camouflage_scale)
-    draw_flyover_trajectories(tensor, centers, origin, num_flyover, rng, mask, heatmap, camouflage_scale)
+    draw_straight_trajectories(tensor, centers, origin, num_straight, rng, mask, heatmap, camouflage_scale,
+                                filament_region)
+    draw_parabolic_trajectories(tensor, centers, origin, num_parabolic, rng, mask, heatmap, camouflage_scale,
+                                 filament_region)
+    draw_flyover_trajectories(tensor, centers, origin, num_flyover, rng, mask, heatmap, camouflage_scale,
+                               filament_region)

@@ -103,8 +103,11 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     # Periferia filamentosa: estrías radiales desde la línea de tiro. Va después
     # de draw_smoke porque sus manchas sustractivas perforan todo lo que esté
     # marcado como humo (ver smoke.py::draw_smoke_filaments).
-    draw_smoke_filaments(tensor, blast_line, smoke_radius, rng, mask,
-                         brightness_scale=brightness_scale, heatmap=heatmap)
+    # Devuelve qué píxeles son humo SOLO por los filamentos (periferia fibrosa,
+    # no núcleo): las trayectorias se dibujan por encima de esos y quedan
+    # ocultas dentro del núcleo. Ver trajectories.py::_SMOKE_OVERRIDE_PROB.
+    filament_region = draw_smoke_filaments(tensor, blast_line, smoke_radius, rng, mask,
+                                            brightness_scale=brightness_scale)
 
     # Trayectorias de metralla (rectas + parabólicas de ida y vuelta + arcos
     # de sobrevuelo, fragmentos grandes que vuelan por encima de la nube)
@@ -112,7 +115,7 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     num_parabolic = rng.integers(15, 30)
     num_flyover = rng.integers(1, 4)
     draw_trajectories(tensor, centers, origin, num_straight, num_parabolic, rng, mask, heatmap, num_flyover,
-                       camouflage_scale=brightness_scale)
+                       camouflage_scale=brightness_scale, filament_region=filament_region)
 
     # Derrumbe: franjas de desprendimiento independientes de la explosión,
     # aproximadamente paralelas entre sí, con puntos de inicio propios
