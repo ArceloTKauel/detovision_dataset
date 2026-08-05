@@ -143,7 +143,22 @@ def _sample_trajectory_width(rng: np.random.Generator) -> int:
 # se ve. Queda como constante y no cableado porque es la dosis del cambio, y
 # bajarlo es la forma de aflojarlo sin tocar la geometría.
 _SMOKE_OVERRIDE_PROB = 1.0
-_SMOKE_OVERRIDE_CONTRAST_RANGE = (35, 75)
+# Cuánto se levanta el pelo por encima del humo local. Calibrado contra el
+# contraste local (píxel menos la mediana de su vecindario 7x7) de la
+# estructura fina DENTRO de la pluma en ESS_F04: p90=+10, p99=+26, max=+118.
+# Con (35, 75) los pelos salían blanco puro sobre la pluma — el 18.3% por
+# encima de 190.
+_SMOKE_OVERRIDE_CONTRAST_RANGE = (15, 45)
+# Techo absoluto del pelo sobre la pluma: ninguna de las 7 referencias supera
+# 190 en ningún píxel, así que un pelo que sature a blanco es un rasgo que el
+# modelo no va a ver nunca en producción.
+_SMOKE_OVERRIDE_MAX = 190
+# Sobre la periferia el pelo va de 1 px, no del ancho sorteado para el resto de
+# la trayectoria: en las referencias los pelos que cruzan la pluma son finos, y
+# un trazo de 2-3 px con realce sale como una tira gruesa que no se parece a
+# nada real. También es lo que permite que la máscara y la tinta coincidan
+# píxel a píxel ahí (ver _paint_traj_mask).
+_SMOKE_OVERRIDE_WIDTH = 1
 
 
 def _sample_smoke_override(rng: np.random.Generator) -> tuple[bool, int]:
@@ -197,12 +212,15 @@ def _paint_trajectory_pixel(
             if not (0 <= nx < w):
                 continue
             pixel_brightness = brightness
-            if mask is not None and mask[ny, nx] == 1:
-                if over_filaments and filament_region[ny, nx]:
-                    pixel_brightness = max(brightness,
-                                           min(255, int(tensor[ny, nx]) + override_contrast))
-                else:
-                    pixel_brightness = int(brightness * camouflage_scale)
+            if over_filaments and filament_region[ny, nx]:
+                # Se decide por filament_region y NO por mask == 1: otra
+                # trayectoria pudo haber pasado antes por acá y dejado el píxel
+                # en clase 2, y en ese caso el realce igual tiene que aplicarse.
+                pixel_brightness = max(brightness,
+                                       min(_SMOKE_OVERRIDE_MAX,
+                                           int(tensor[ny, nx]) + override_contrast))
+            elif mask is not None and mask[ny, nx] == 1:
+                pixel_brightness = int(brightness * camouflage_scale)
             tensor[ny, nx] = max(tensor[ny, nx], pixel_brightness)
 
 
@@ -236,12 +254,60 @@ def _stamp_heatmap(
                 heatmap[ny, nx] = value
 
 
+def _paint_over_filaments(
+    tensor: np.ndarray,
+    py: int,
+    px: int,
+    rng: np.random.Generator,
+    brightness_mean: float,
+    mask: np.ndarray | None,
+    camouflage_scale: float,
+    override_contrast: int,
+    filament_region: np.ndarray | None,
+) -> bool:
+    """Sobre la periferia fibrosa el trazo va CONTINUO, no punteado. Pinta el
+    píxel y devuelve True si corresponde; False si el píxel no cae ahí y hay que
+    seguir con el punteado normal.
+
+    Por qué, y es la razón de ser de todo el mecanismo: la máscara marca clase 2
+    en TODO el recorrido, pero el punteado solo deposita tinta en una fracción.
+    Medido sobre el código sin esto, el 82% de los píxeles etiquetados
+    trayectoria que caen en la periferia fibrosa no recibía nada — o sea que en
+    el 82% de su superficie el modelo veía textura de humo fibroso etiquetada
+    trayectoria, sin ninguna señal que la distinguiera. Eso es exactamente lo
+    que hacía v19, que aprendió que la fibra es metralla y en Video 3 frame 720
+    pasó de 8 detecciones a 80.
+
+    La diferencia entre este enfoque y v19 —que la clase 2 esté respaldada por
+    tinta visible— solo existe donde efectivamente hay tinta. De ahí el trazo
+    continuo.
+
+    Sobre fondo negro el punteado se mantiene: ahí cada punto salta con
+    contraste ~51 contra el vacío y el trazo se lee igual.
+    """
+    if override_contrast <= 0 or filament_region is None:
+        return False
+    h, w = tensor.shape
+    if not (0 <= py < h and 0 <= px < w) or not filament_region[py, px]:
+        return False
+    brightness = _trajectory_brightness(rng, brightness_mean)
+    _paint_trajectory_pixel(tensor, py, px, brightness, _SMOKE_OVERRIDE_WIDTH, mask,
+                            camouflage_scale, override_contrast, filament_region)
+    return True
+
+
 def _paint_traj_mask(mask: np.ndarray, py: int, px: int, h: int, w: int,
                      over_smoke: bool = False,
                      filament_region: np.ndarray | None = None) -> None:
     """Marca clase 2 sobre fondo. Con over_smoke, también le gana al humo
     (clase 1) pero solo donde ese humo es periferia fibrosa: sobre el núcleo la
     trayectoria queda oculta, como siempre.
+
+    Sobre la periferia la marca es de 1 px (solo el píxel del recorrido), no de
+    2 px como sobre fondo. Es para que la etiqueta coincida con la tinta, que
+    ahí también es de 1 px (_SMOKE_OVERRIDE_WIDTH): con la marca de 2 px, la
+    mitad de los píxeles clase 2 sobre el humo quedaban sin tinta por
+    construcción — el mismo problema que el punteado, en chico.
 
     El heatmap se estampa DESPUÉS de esto en las tres funciones de dibujo, y
     _stamp_heatmap sigue saltando los píxeles clase 1 — o sea que el gradiente
@@ -256,7 +322,10 @@ def _paint_traj_mask(mask: np.ndarray, py: int, px: int, h: int, w: int,
             ny, nx = py + dy, px + dx
             if not (0 <= ny < h and 0 <= nx < w):
                 continue
-            if mask[ny, nx] == 0 or (claim_smoke and mask[ny, nx] == 1 and filament_region[ny, nx]):
+            if mask[ny, nx] == 0:
+                mask[ny, nx] = 2
+            elif (claim_smoke and mask[ny, nx] == 1 and filament_region[ny, nx]
+                    and dy == 0 and dx == 0):
                 mask[ny, nx] = 2
 
 
@@ -334,6 +403,11 @@ def draw_trajectory(
     max_dist = length if length > 0 else 1
 
     for py, px in points:
+        if _paint_over_filaments(tensor, py, px, rng, brightness_mean, mask,
+                                  camouflage_scale, override_contrast, filament_region):
+            pixels_drawn += 1
+            continue
+
         if erase_remaining > 0:
             erase_remaining -= 1
             if erase_remaining == 0:
@@ -516,6 +590,11 @@ def draw_returning_parabola(
         for spy, spx in segment:
             all_points.append((spy, spx))
 
+            if _paint_over_filaments(tensor, spy, spx, rng, brightness_mean, mask,
+                                      camouflage_scale, override_contrast, filament_region):
+                pixels_drawn += 1
+                continue
+
             if erase_remaining > 0:
                 erase_remaining -= 1
                 if erase_remaining == 0:
@@ -673,6 +752,11 @@ def draw_flyover_trajectory(
 
         for spy, spx in segment:
             all_points.append((spy, spx))
+
+            if _paint_over_filaments(tensor, spy, spx, rng, brightness_mean, mask,
+                                      camouflage_scale, override_contrast, filament_region):
+                pixels_drawn += 1
+                continue
 
             if erase_remaining > 0:
                 erase_remaining -= 1
