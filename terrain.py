@@ -36,11 +36,23 @@ Funciones:
 import numpy as np
 from PIL import Image, ImageFilter
 
-# Probabilidad de que una imagen del dataset lleve manchón de terreno —
-# mismo valor que FAKE_TERRAIN_PROB en detovision_segmentation/utils/dataset.py,
-# pero acá la decisión queda fija para siempre en esa imagen (no se
-# resortea por época).
-TERRAIN_PROB = 0.5
+# Probabilidad de que una imagen del dataset lleve manchón de terreno. Antes era
+# 0.5, igual que FAKE_TERRAIN_PROB en detovision_segmentation/utils/dataset.py,
+# pero acá la decisión queda fija para siempre en esa imagen (no se resortea por
+# época).
+#
+# Pasó a 1.0 con el dataset temporal (ver sequence.py). Con 0.5, una explosión
+# sin terreno producía frames pre-ignición sin absolutamente nada: medido sobre
+# un lote de 50 secuencias, el 23% de los frames salía completamente negro y el
+# 56% de las secuencias tenía al menos uno. En una imagen suelta eso pasaba
+# desapercibido porque la explosión estaba igual; en una secuencia son una docena
+# de entradas vacías idénticas.
+#
+# Y no existen en la realidad: en las siete referencias el terreno llena el
+# cuadro desde el primer frame, con p50 entre 7 y 10. Un frame vacío no es un
+# caso difícil, es una entrada sin información que el modelo nunca va a ver en
+# producción.
+TERRAIN_PROB = 1.0
 
 # ── Campo de "elevación" (dirección/curvatura del parallax) ────────────────
 TERRAIN_FIELD_OCTAVES    = (1, 2)

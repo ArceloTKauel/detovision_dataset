@@ -55,9 +55,21 @@ SHEET_BRIGHTNESS = 3.5
 # Largo de la secuencia. Las reales tienen 13-15 imágenes útiles.
 NUM_FRAMES_RANGE = (26, 32)
 
-# Fracción de la secuencia anterior a la ignición, medida sobre las cuatro
-# referencias miradas en orden: 6/15, 5/13, 7/14, 4/14.
-PRE_IGNITION_FRACTION_RANGE = (0.29, 0.50)
+# Fracción de la secuencia anterior a la ignición.
+#
+# En las referencias va de 0.29 a 0.50 (6/15, 5/13, 7/14, 4/14), y ese fue el
+# valor inicial. Se bajó a propósito: con 0.29-0.50, el 41% de las máscaras del
+# dataset salía 100% fondo y el formato temporal diluía la clase humo a un tercio
+# y la trayectoria a un cuarto de su frecuencia en el dataset de imagen única.
+#
+# La proporción de frames pre-explosión es una decisión de MUESTREO nuestra, no
+# una propiedad del dominio: las referencias son grabaciones continuas, no un
+# dataset balanceado. Lo que hay que reproducir con fidelidad es cómo se ve un
+# frame pre-explosión, no cuántos vienen por secuencia.
+#
+# Siguen haciendo falta: son la señal de "acá no hay nada" y atacan de frente el
+# modo de falla de v18, terreno predicho como humo (ver el repo de segmentación).
+PRE_IGNITION_FRACTION_RANGE = (0.15, 0.30)
 
 # Rampa del terreno: intensidad relativa en el primer frame, y en qué fracción
 # de los frames pre-ignición llega a 1.0 y se queda. En las referencias la
