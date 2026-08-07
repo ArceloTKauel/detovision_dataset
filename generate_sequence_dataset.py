@@ -28,7 +28,17 @@ from main import HEIGHT, WIDTH
 from sequence import generate_explosion_sequence
 from export import tensor_to_image, mask_to_rgb
 
-TOTAL_SEQUENCES = 50
+# Secuencias, NO imágenes: cada una produce ~29 frames, así que son ~87.000 pares
+# imagen/máscara (~5.7 GB). El dataset de imagen única tenía 10.000 explosiones en
+# 10.000 imágenes; acá lo que se mantiene alto a propósito es la variedad de
+# EXPLOSIONES, porque los frames de una misma secuencia están muy correlacionados
+# entre sí y aportan poco de a uno. Bajar esto a 346 para conservar "10.000
+# imágenes" dejaría al modelo viendo el mismo terreno 29 veces.
+#
+# 3.000 y no 10.000 porque una época escala con el total de frames: con 10.000
+# secuencias cada época tarda 29x más que en v20, y no vale comprometerse a eso
+# antes de saber si el enfoque temporal sirve. Escalar después es regenerar.
+TOTAL_SEQUENCES = 3_000
 DATASET_DIR = "dataset_sequences"
 
 # Desfase entre la semilla de la explosión y la de su estructura temporal. Son
