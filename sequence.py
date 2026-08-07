@@ -41,6 +41,8 @@ Funciones:
       revisar la progresión completa de un vistazo.
 """
 
+import sys
+
 import numpy as np
 
 from main import generate_explosion, HEIGHT, WIDTH
@@ -51,7 +53,7 @@ from export import tensor_to_image, mask_to_rgb, contact_sheet
 SHEET_BRIGHTNESS = 3.5
 
 # Largo de la secuencia. Las reales tienen 13-15 imágenes útiles.
-NUM_FRAMES_RANGE = (13, 16)
+NUM_FRAMES_RANGE = (26, 32)
 
 # Fracción de la secuencia anterior a la ignición, medida sobre las cuatro
 # referencias miradas en orden: 6/15, 5/13, 7/14, 4/14.
@@ -80,12 +82,23 @@ TERRAIN_RAMP_SATURATE_AT = 0.85
 SMOKE_REACH_PERCENTILE = 98
 SMOKE_GROWTH_EXPONENT = 1.0
 
-# Ventana en la que puede lanzarse una trayectoria y cuánto dura su vuelo, ambas
-# como fracción del tramo post-ignición. El piso del lanzamiento no es 0 porque
-# en las referencias las trayectorias aparecen 1-2 imágenes DESPUÉS del humo,
-# nunca junto con el fogonazo.
+# Ventana en la que puede lanzarse una trayectoria, como fracción del tramo
+# post-ignición. El piso no es 0 porque en las referencias las trayectorias
+# aparecen 1-2 imágenes DESPUÉS del humo, nunca junto con el fogonazo.
 TRAJECTORY_LAUNCH_RANGE = (0.10, 0.70)
-TRAJECTORY_FLIGHT_RANGE = (0.15, 0.55)
+
+# Tiempo de vuelo del fragmento, como fracción del tramo post-ignición.
+#
+# Medido siguiendo el mismo arco por frames consecutivos en dos referencias:
+# Video 4 (f480→f660) y Video 3 (f600→f780) tardan 3 pasos sobre tramos de ~7,
+# o sea ~0.43 en las dos — pese a que el arco de Video 3 es un orden de magnitud
+# más largo que los de Video 4. Por eso el rango es estrecho y no depende del
+# largo del recorrido; el porqué está en trajectories.py::_progress_window.
+#
+# No depende tampoco de cuántos frames tenga la secuencia: al expresarse como
+# fracción del tramo, agregar frames cambia la resolución temporal con que se
+# muestrea la explosión, no la física de la explosión.
+TRAJECTORY_DURATION_RANGE = (0.30, 0.55)
 
 # Cota superior de trayectorias por imagen (main.py sortea 15-30 rectas, 15-30
 # lazos y 1-3 sobrevuelos). Se preparan rangos de sobra porque los números reales
@@ -198,14 +211,14 @@ def _terrain_ramp(num_frames: int, ignition: int) -> np.ndarray:
     return TERRAIN_RAMP_START + (1.0 - TERRAIN_RAMP_START) * t
 
 
-def _sample_progress_ranges(time_rng: np.random.Generator) -> list[tuple[float, float]]:
-    """(lanzamiento, aterrizaje) por trayectoria, como fracción del tramo
-    post-ignición. Cada una se lanza en su propio momento y tarda lo suyo en
-    recorrerse: por eso en las referencias los lazos grandes solo están completos
-    al final, mientras que los trazos radiales cortos ya se ven temprano."""
+def _sample_progress_schedule(time_rng: np.random.Generator) -> list[tuple[float, float]]:
+    """(lanzamiento, duración) por trayectoria, ambos como fracción del tramo
+    post-ignición. Cada fragmento sale en su propio momento y vuela lo suyo: por
+    eso en las referencias unos arcos ya están cerrados mientras otros recién
+    empiezan a curvarse."""
     launch = time_rng.uniform(*TRAJECTORY_LAUNCH_RANGE, size=_MAX_TRAJECTORIES)
-    flight = time_rng.uniform(*TRAJECTORY_FLIGHT_RANGE, size=_MAX_TRAJECTORIES)
-    return [(float(lo), float(min(lo + fl, 1.0))) for lo, fl in zip(launch, flight)]
+    duration = time_rng.uniform(*TRAJECTORY_DURATION_RANGE, size=_MAX_TRAJECTORIES)
+    return [(float(lo), float(d)) for lo, d in zip(launch, duration)]
 
 
 def generate_explosion_sequence(
@@ -241,7 +254,7 @@ def generate_explosion_sequence(
         observer=lambda stage, t, m, hm, ctx: recorder(
             stage, t, m, hm, {**ctx, "progress_map": progress_map}),
         progress_map=progress_map,
-        progress_ranges=_sample_progress_ranges(time_rng),
+        progress_schedule=_sample_progress_schedule(time_rng),
     )
 
     ramp = _terrain_ramp(num_frames, ignition)
@@ -270,7 +283,17 @@ def generate_explosion_sequence(
 
 
 def main():
-    frames = generate_explosion_sequence(HEIGHT, WIDTH)
+    # Semilla opcional por línea de comandos: sin ella cada corrida da una
+    # explosión distinta, con ella se repite la misma — que es lo que hace falta
+    # para comparar el efecto de un cambio de parámetro entre dos corridas.
+    seed = int(sys.argv[1]) if len(sys.argv) > 1 else None
+    if seed is None:
+        frames = generate_explosion_sequence(HEIGHT, WIDTH)
+    else:
+        frames = generate_explosion_sequence(HEIGHT, WIDTH,
+                                             np.random.default_rng(seed),
+                                             np.random.default_rng(1000 + seed))
+        print(f"semilla {seed}")
 
     tensor_paths, mask_paths = [], []
     for i, (tensor, mask, heatmap) in enumerate(frames):

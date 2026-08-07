@@ -50,11 +50,11 @@ def generate_explosion(
     rng: np.random.Generator | None = None,
     observer=None,
     progress_map: np.ndarray | None = None,
-    progress_ranges: list[tuple[float, float]] | None = None,
+    progress_schedule: list[tuple[float, float]] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Retorna (tensor B/W, mask categórica, heatmap de trayectoria), generados en un solo pase.
 
-    observer, progress_map y progress_ranges son los ganchos de la generación
+    observer, progress_map y progress_schedule son los ganchos de la generación
     temporal (ver sequence.py) y no alteran en nada la imagen resultante: con
     los tres en None esta función produce exactamente lo mismo que antes de que
     existieran, bit a bit y con el mismo consumo de rng.
@@ -147,7 +147,7 @@ def generate_explosion(
     num_flyover = rng.integers(1, 4)
     draw_trajectories(tensor, centers, origin, num_straight, num_parabolic, rng, mask, heatmap, num_flyover,
                        camouflage_scale=brightness_scale, filament_region=filament_region,
-                       progress_map=progress_map, progress_ranges=progress_ranges)
+                       progress_map=progress_map, progress_schedule=progress_schedule)
     notify("trajectories", num_trajectories=num_straight + num_parabolic + num_flyover)
 
     # Derrumbe: franjas de desprendimiento independientes de la explosión,

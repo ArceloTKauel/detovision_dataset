@@ -336,6 +336,44 @@ def _paint_traj_mask(mask: np.ndarray, py: int, px: int, h: int, w: int,
 _PROGRESS_RADIUS = 1
 
 
+def _progress_window(launch: float, duration: float) -> tuple[float, float]:
+    """Ventana temporal de una trayectoria: en qué momento se lanza y en cuál
+    termina de recorrerse, ambos como fracción del tramo post-ignición.
+
+    La duración NO depende del largo del recorrido, y eso está medido, no
+    supuesto. Mirando el mismo arco a lo largo de frames consecutivos:
+
+        - Video 4 (f480→f660): un arco de unos 300 px tarda 3 pasos de un tramo
+          de ~7.
+        - Video 3 (f600→f780): un arco que cruza medio cuadro, muchísimo más
+          largo, tarda **los mismos 3 pasos** de un tramo de ~7.
+
+    Los dos dan ~0.43 del tramo con largos que difieren en un orden de magnitud.
+    Tiene sentido físico: los fragmentos salen todos en el mismo instante y caen
+    con la misma gravedad, así que el tiempo de vuelo es parecido — los que
+    llegan más lejos simplemente van más rápido.
+
+    Hacer la duración proporcional al largo (o a su raíz) es lo que producía el
+    defecto que esto arregla: los recorridos cortos salían con duración menor a
+    un frame y aparecían completos de golpe entre dos frames consecutivos, con
+    lazos dando la vuelta entera en un paso. En las referencias eso no pasa
+    nunca: todo trazo se dibuja por tramos, avanzando por la punta.
+
+    En 0 la trayectoria ocupa todo el tramo, que es el caso de la generación de
+    una sola imagen.
+
+    El lanzamiento se adelanta si con el sorteado la trayectoria no alcanzaría a
+    completarse: una trayectoria que quedara a medias en el último frame haría
+    que ese frame dejara de coincidir con la imagen que genera el pipeline sin
+    tiempo, que es la propiedad sobre la que se apoya todo sequence.py.
+    """
+    if duration <= 0:
+        return (0.0, 1.0)
+    duration = min(duration, 1.0)
+    launch = min(max(launch, 0.0), 1.0 - duration)
+    return (launch, launch + duration)
+
+
 def _stamp_progress(progress_map: np.ndarray, py: int, px: int, value: float) -> None:
     """Registra en qué momento del recorrido se alcanza cada píxel, quedándose
     con el más temprano.
@@ -394,7 +432,8 @@ def draw_trajectory(
     camouflage_scale: float = 1.0,
     filament_region: np.ndarray | None = None,
     progress_map: np.ndarray | None = None,
-    progress_range: tuple[float, float] = (0.0, 1.0),
+    progress_launch: float = 0.0,
+    progress_duration: float = 0.0,
 ) -> None:
     """
     Dibuja una trayectoria recta punteada desde center en la dirección angle.
@@ -434,7 +473,7 @@ def draw_trajectory(
     pixels_drawn = 0
     max_spacing = 50
     max_dist = length if length > 0 else 1
-    prog_lo, prog_hi = progress_range
+    prog_lo, prog_hi = _progress_window(progress_launch, progress_duration)
 
     for idx, (py, px) in enumerate(points):
         if progress_map is not None:
@@ -550,7 +589,8 @@ def draw_returning_parabola(
     camouflage_scale: float = 1.0,
     filament_region: np.ndarray | None = None,
     progress_map: np.ndarray | None = None,
-    progress_range: tuple[float, float] = (0.0, 1.0),
+    progress_launch: float = 0.0,
+    progress_duration: float = 0.0,
 ) -> None:
     """
     Dibuja una trayectoria en forma de lazo/óvalo que parte de `start`
@@ -612,7 +652,7 @@ def draw_returning_parabola(
     all_points = []
 
     max_dist = 2 * a if a > 0 else 1  # distancia del punto más lejano del lazo a `start`
-    prog_lo, prog_hi = progress_range
+    prog_lo, prog_hi = _progress_window(progress_launch, progress_duration)
 
     for i in range(num_steps + 1):
         progress = i / num_steps
@@ -717,7 +757,8 @@ def draw_flyover_trajectory(
     camouflage_scale: float = 1.0,
     filament_region: np.ndarray | None = None,
     progress_map: np.ndarray | None = None,
-    progress_range: tuple[float, float] = (0.0, 1.0),
+    progress_launch: float = 0.0,
+    progress_duration: float = 0.0,
 ) -> None:
     """
     Dibuja una trayectoria en forma de arco abierto (medio lazo) que parte de
@@ -782,7 +823,7 @@ def draw_flyover_trajectory(
     grace_remaining = 0
     pixels_drawn = 0
     all_points = []
-    prog_lo, prog_hi = progress_range
+    prog_lo, prog_hi = _progress_window(progress_launch, progress_duration)
 
     for i in range(num_steps + 1):
         progress = i / num_steps
@@ -879,7 +920,7 @@ def draw_straight_trajectories(
     camouflage_scale: float = 1.0,
     filament_region: np.ndarray | None = None,
     progress_map: np.ndarray | None = None,
-    progress_ranges: list[tuple[float, float]] | None = None,
+    progress_schedule: list[tuple[float, float]] | None = None,
 ) -> None:
     """Genera múltiples trayectorias rectas desde centros aleatorios."""
     h, w = tensor.shape
@@ -902,9 +943,9 @@ def draw_straight_trajectories(
         else:
             erase_prob = 0.0
             frac_lo, frac_hi = 0.0, 0.0
+        launch, duration = _schedule_at(progress_schedule, i)
         draw_trajectory(tensor, center, angle, length, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap,
-                         camouflage_scale, filament_region,
-                         progress_map, _progress_range_at(progress_ranges, i))
+                         camouflage_scale, filament_region, progress_map, launch, duration)
 
 
 # Fracción mínima de trayectorias parabólicas que deben quedar mayormente
@@ -919,14 +960,15 @@ MIN_VISIBLE_FRACTION = 0.5
 PARABOLA_MAX_SPACING_RANGE = (8, 25)
 
 
-def _progress_range_at(progress_ranges: list[tuple[float, float]] | None,
-                       i: int) -> tuple[float, float]:
-    """Rango temporal de la i-ésima trayectoria del grupo. Sin lista de rangos
-    (generación de una sola imagen) todas ocupan el recorrido completo, que es
-    lo que _stamp_progress ignora de todos modos si no hay progress_map."""
-    if progress_ranges is None or i >= len(progress_ranges):
-        return (0.0, 1.0)
-    return progress_ranges[i]
+def _schedule_at(progress_schedule: list[tuple[float, float]] | None,
+                 i: int) -> tuple[float, float]:
+    """(lanzamiento, duración) de la i-ésima trayectoria del grupo. Sin
+    calendario (generación de una sola imagen) la duración es 0, que
+    _progress_window interpreta como "ocupa todo el tramo" — irrelevante de
+    todos modos, porque sin progress_map no se anota nada."""
+    if progress_schedule is None or i >= len(progress_schedule):
+        return (0.0, 0.0)
+    return progress_schedule[i]
 
 
 def draw_parabolic_trajectories(
@@ -940,7 +982,7 @@ def draw_parabolic_trajectories(
     camouflage_scale: float = 1.0,
     filament_region: np.ndarray | None = None,
     progress_map: np.ndarray | None = None,
-    progress_ranges: list[tuple[float, float]] | None = None,
+    progress_schedule: list[tuple[float, float]] | None = None,
 ) -> None:
     """
     Genera múltiples trayectorias en forma de lazo/óvalo: cada una parte de
@@ -966,10 +1008,11 @@ def draw_parabolic_trajectories(
 
         min_visible = MIN_VISIBLE_FRACTION if i < num_contained else 0.0
         max_spacing = rng.uniform(*PARABOLA_MAX_SPACING_RANGE)
+        launch, duration = _schedule_at(progress_schedule, i)
         draw_returning_parabola(tensor, start, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap,
                                  min_visible, max_spacing=max_spacing, camouflage_scale=camouflage_scale,
                                  filament_region=filament_region, progress_map=progress_map,
-                                 progress_range=_progress_range_at(progress_ranges, i))
+                                 progress_launch=launch, progress_duration=duration)
 
 
 def draw_flyover_trajectories(
@@ -983,7 +1026,7 @@ def draw_flyover_trajectories(
     camouflage_scale: float = 1.0,
     filament_region: np.ndarray | None = None,
     progress_map: np.ndarray | None = None,
-    progress_ranges: list[tuple[float, float]] | None = None,
+    progress_schedule: list[tuple[float, float]] | None = None,
 ) -> None:
     """Genera trayectorias de arco abierto que sobrevuelan la nube de humo."""
     for i in range(num_trajectories):
@@ -998,10 +1041,11 @@ def draw_flyover_trajectories(
             frac_lo, frac_hi = 0.0, 0.0
 
         max_spacing = rng.uniform(*PARABOLA_MAX_SPACING_RANGE)
+        launch, duration = _schedule_at(progress_schedule, i)
         draw_flyover_trajectory(tensor, start, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap,
                                  max_spacing=max_spacing, camouflage_scale=camouflage_scale,
                                  filament_region=filament_region, progress_map=progress_map,
-                                 progress_range=_progress_range_at(progress_ranges, i))
+                                 progress_launch=launch, progress_duration=duration)
 
 
 def draw_trajectories(
@@ -1017,18 +1061,18 @@ def draw_trajectories(
     camouflage_scale: float = 1.0,
     filament_region: np.ndarray | None = None,
     progress_map: np.ndarray | None = None,
-    progress_ranges: list[tuple[float, float]] | None = None,
+    progress_schedule: list[tuple[float, float]] | None = None,
 ) -> None:
     """Punto de entrada: dibuja trayectorias rectas, parabólicas y de sobrevuelo.
 
-    progress_ranges, si se pasa, trae un (lanzamiento, aterrizaje) por
+    progress_schedule, si se pasa, trae un (lanzamiento, duración) por
     trayectoria en el mismo orden en que se dibujan —primero las rectas, después
     las parabólicas, al final los sobrevuelos— y se reparte entre los tres
     grupos. Lo arma sequence.py; acá solo se distribuye."""
-    ranges = progress_ranges or []
-    straight_r = ranges[:num_straight] or None
-    parabolic_r = ranges[num_straight:num_straight + num_parabolic] or None
-    flyover_r = ranges[num_straight + num_parabolic:] or None
+    schedule = progress_schedule or []
+    straight_r = schedule[:num_straight] or None
+    parabolic_r = schedule[num_straight:num_straight + num_parabolic] or None
+    flyover_r = schedule[num_straight + num_parabolic:] or None
 
     draw_straight_trajectories(tensor, centers, origin, num_straight, rng, mask, heatmap, camouflage_scale,
                                 filament_region, progress_map, straight_r)
