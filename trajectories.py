@@ -329,6 +329,33 @@ def _paint_traj_mask(mask: np.ndarray, py: int, px: int, h: int, w: int,
                 mask[ny, nx] = 2
 
 
+# Radio del bloque que marca _stamp_progress alrededor de cada punto del
+# recorrido. 1 (bloque 3x3) cubre exactamente todo lo que un punto puede tocar:
+# el ancho máximo del trazo (_WIDTH_OFFSETS llega a ±1), el kernel 3x3 del
+# heatmap y los offsets de la máscara (_MASK_OFFSETS = -1, 0).
+_PROGRESS_RADIUS = 1
+
+
+def _stamp_progress(progress_map: np.ndarray, py: int, px: int, value: float) -> None:
+    """Registra en qué momento del recorrido se alcanza cada píxel, quedándose
+    con el más temprano.
+
+    Es lo que permite armar la secuencia temporal retrocediendo (ver
+    sequence.py): la explosión se dibuja completa UNA vez, igual que siempre, y
+    este mapa dice para cada píxel a partir de qué frame existe. El frame t es
+    la imagen final menos todo lo que nace después de t.
+
+    Que sea el momento del RECORRIDO y no el brillo es el punto: en las
+    referencias reales una trayectoria parcial es un trazo truncado —la punta
+    avanza y lo ya dibujado no cambia de brillo—, no un trazo atenuado.
+    """
+    h, w = progress_map.shape
+    for ny in range(max(py - _PROGRESS_RADIUS, 0), min(py + _PROGRESS_RADIUS + 1, h)):
+        for nx in range(max(px - _PROGRESS_RADIUS, 0), min(px + _PROGRESS_RADIUS + 1, w)):
+            if value < progress_map[ny, nx]:
+                progress_map[ny, nx] = value
+
+
 def bresenham(y0: int, x0: int, y1: int, x1: int) -> list[tuple[int, int]]:
     """Rasterización de línea entre (y0,x0) y (y1,x1). Retorna todos los píxeles."""
     points = []
@@ -366,6 +393,8 @@ def draw_trajectory(
     heatmap: np.ndarray | None = None,
     camouflage_scale: float = 1.0,
     filament_region: np.ndarray | None = None,
+    progress_map: np.ndarray | None = None,
+    progress_range: tuple[float, float] = (0.0, 1.0),
 ) -> None:
     """
     Dibuja una trayectoria recta punteada desde center en la dirección angle.
@@ -375,6 +404,10 @@ def draw_trajectory(
     erase_frac_range: (min, max) fracción del largo total a borrar por sección.
     camouflage_scale: atenuación aplicada a los píxeles que caen sobre humo
     (ver _paint_trajectory_pixel), misma escala global de smoke.py.
+    progress_map: si se pasa, se anota ahí en qué punto del recorrido se alcanza
+    cada píxel, remapeado al intervalo progress_range de esta trayectoria (ver
+    _stamp_progress). No altera el dibujo ni consume rng: la imagen resultante
+    es idéntica con y sin él.
     """
     h, w = tensor.shape
     cy, cx = center
@@ -401,8 +434,13 @@ def draw_trajectory(
     pixels_drawn = 0
     max_spacing = 50
     max_dist = length if length > 0 else 1
+    prog_lo, prog_hi = progress_range
 
-    for py, px in points:
+    for idx, (py, px) in enumerate(points):
+        if progress_map is not None:
+            _stamp_progress(progress_map, py, px,
+                            prog_lo + (prog_hi - prog_lo) * (idx / total_len))
+
         if _paint_over_filaments(tensor, py, px, rng, brightness_mean, mask,
                                   camouflage_scale, override_contrast, filament_region):
             pixels_drawn += 1
@@ -511,6 +549,8 @@ def draw_returning_parabola(
     max_spacing: float = 50.0,
     camouflage_scale: float = 1.0,
     filament_region: np.ndarray | None = None,
+    progress_map: np.ndarray | None = None,
+    progress_range: tuple[float, float] = (0.0, 1.0),
 ) -> None:
     """
     Dibuja una trayectoria en forma de lazo/óvalo que parte de `start`
@@ -572,6 +612,7 @@ def draw_returning_parabola(
     all_points = []
 
     max_dist = 2 * a if a > 0 else 1  # distancia del punto más lejano del lazo a `start`
+    prog_lo, prog_hi = progress_range
 
     for i in range(num_steps + 1):
         progress = i / num_steps
@@ -589,6 +630,10 @@ def draw_returning_parabola(
 
         for spy, spx in segment:
             all_points.append((spy, spx))
+
+            if progress_map is not None:
+                _stamp_progress(progress_map, spy, spx,
+                                prog_lo + (prog_hi - prog_lo) * progress)
 
             if _paint_over_filaments(tensor, spy, spx, rng, brightness_mean, mask,
                                       camouflage_scale, override_contrast, filament_region):
@@ -671,6 +716,8 @@ def draw_flyover_trajectory(
     height_factor_range: tuple[float, float] = (1.2, 1.8),
     camouflage_scale: float = 1.0,
     filament_region: np.ndarray | None = None,
+    progress_map: np.ndarray | None = None,
+    progress_range: tuple[float, float] = (0.0, 1.0),
 ) -> None:
     """
     Dibuja una trayectoria en forma de arco abierto (medio lazo) que parte de
@@ -735,6 +782,7 @@ def draw_flyover_trajectory(
     grace_remaining = 0
     pixels_drawn = 0
     all_points = []
+    prog_lo, prog_hi = progress_range
 
     for i in range(num_steps + 1):
         progress = i / num_steps
@@ -752,6 +800,10 @@ def draw_flyover_trajectory(
 
         for spy, spx in segment:
             all_points.append((spy, spx))
+
+            if progress_map is not None:
+                _stamp_progress(progress_map, spy, spx,
+                                prog_lo + (prog_hi - prog_lo) * progress)
 
             if _paint_over_filaments(tensor, spy, spx, rng, brightness_mean, mask,
                                       camouflage_scale, override_contrast, filament_region):
@@ -826,12 +878,14 @@ def draw_straight_trajectories(
     heatmap: np.ndarray | None = None,
     camouflage_scale: float = 1.0,
     filament_region: np.ndarray | None = None,
+    progress_map: np.ndarray | None = None,
+    progress_ranges: list[tuple[float, float]] | None = None,
 ) -> None:
     """Genera múltiples trayectorias rectas desde centros aleatorios."""
     h, w = tensor.shape
     diagonal = np.sqrt(h ** 2 + w ** 2)
 
-    for _ in range(num_trajectories):
+    for i in range(num_trajectories):
         center = centers[rng.integers(0, len(centers))]
         angle = rng.uniform(0, 2 * np.pi)
 
@@ -849,7 +903,8 @@ def draw_straight_trajectories(
             erase_prob = 0.0
             frac_lo, frac_hi = 0.0, 0.0
         draw_trajectory(tensor, center, angle, length, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap,
-                         camouflage_scale, filament_region)
+                         camouflage_scale, filament_region,
+                         progress_map, _progress_range_at(progress_ranges, i))
 
 
 # Fracción mínima de trayectorias parabólicas que deben quedar mayormente
@@ -864,6 +919,16 @@ MIN_VISIBLE_FRACTION = 0.5
 PARABOLA_MAX_SPACING_RANGE = (8, 25)
 
 
+def _progress_range_at(progress_ranges: list[tuple[float, float]] | None,
+                       i: int) -> tuple[float, float]:
+    """Rango temporal de la i-ésima trayectoria del grupo. Sin lista de rangos
+    (generación de una sola imagen) todas ocupan el recorrido completo, que es
+    lo que _stamp_progress ignora de todos modos si no hay progress_map."""
+    if progress_ranges is None or i >= len(progress_ranges):
+        return (0.0, 1.0)
+    return progress_ranges[i]
+
+
 def draw_parabolic_trajectories(
     tensor: np.ndarray,
     centers: list[tuple[int, int]],
@@ -874,6 +939,8 @@ def draw_parabolic_trajectories(
     heatmap: np.ndarray | None = None,
     camouflage_scale: float = 1.0,
     filament_region: np.ndarray | None = None,
+    progress_map: np.ndarray | None = None,
+    progress_ranges: list[tuple[float, float]] | None = None,
 ) -> None:
     """
     Genera múltiples trayectorias en forma de lazo/óvalo: cada una parte de
@@ -901,7 +968,8 @@ def draw_parabolic_trajectories(
         max_spacing = rng.uniform(*PARABOLA_MAX_SPACING_RANGE)
         draw_returning_parabola(tensor, start, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap,
                                  min_visible, max_spacing=max_spacing, camouflage_scale=camouflage_scale,
-                                 filament_region=filament_region)
+                                 filament_region=filament_region, progress_map=progress_map,
+                                 progress_range=_progress_range_at(progress_ranges, i))
 
 
 def draw_flyover_trajectories(
@@ -914,9 +982,11 @@ def draw_flyover_trajectories(
     heatmap: np.ndarray | None = None,
     camouflage_scale: float = 1.0,
     filament_region: np.ndarray | None = None,
+    progress_map: np.ndarray | None = None,
+    progress_ranges: list[tuple[float, float]] | None = None,
 ) -> None:
     """Genera trayectorias de arco abierto que sobrevuelan la nube de humo."""
-    for _ in range(num_trajectories):
+    for i in range(num_trajectories):
         start = centers[rng.integers(0, len(centers))]
 
         if rng.random() < 0.5:
@@ -930,7 +1000,8 @@ def draw_flyover_trajectories(
         max_spacing = rng.uniform(*PARABOLA_MAX_SPACING_RANGE)
         draw_flyover_trajectory(tensor, start, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap,
                                  max_spacing=max_spacing, camouflage_scale=camouflage_scale,
-                                 filament_region=filament_region)
+                                 filament_region=filament_region, progress_map=progress_map,
+                                 progress_range=_progress_range_at(progress_ranges, i))
 
 
 def draw_trajectories(
@@ -945,11 +1016,23 @@ def draw_trajectories(
     num_flyover: int = 0,
     camouflage_scale: float = 1.0,
     filament_region: np.ndarray | None = None,
+    progress_map: np.ndarray | None = None,
+    progress_ranges: list[tuple[float, float]] | None = None,
 ) -> None:
-    """Punto de entrada: dibuja trayectorias rectas, parabólicas y de sobrevuelo."""
+    """Punto de entrada: dibuja trayectorias rectas, parabólicas y de sobrevuelo.
+
+    progress_ranges, si se pasa, trae un (lanzamiento, aterrizaje) por
+    trayectoria en el mismo orden en que se dibujan —primero las rectas, después
+    las parabólicas, al final los sobrevuelos— y se reparte entre los tres
+    grupos. Lo arma sequence.py; acá solo se distribuye."""
+    ranges = progress_ranges or []
+    straight_r = ranges[:num_straight] or None
+    parabolic_r = ranges[num_straight:num_straight + num_parabolic] or None
+    flyover_r = ranges[num_straight + num_parabolic:] or None
+
     draw_straight_trajectories(tensor, centers, origin, num_straight, rng, mask, heatmap, camouflage_scale,
-                                filament_region)
+                                filament_region, progress_map, straight_r)
     draw_parabolic_trajectories(tensor, centers, origin, num_parabolic, rng, mask, heatmap, camouflage_scale,
-                                 filament_region)
+                                 filament_region, progress_map, parabolic_r)
     draw_flyover_trajectories(tensor, centers, origin, num_flyover, rng, mask, heatmap, camouflage_scale,
-                               filament_region)
+                               filament_region, progress_map, flyover_r)

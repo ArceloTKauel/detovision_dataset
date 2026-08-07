@@ -44,10 +44,33 @@ WIDTH = 768
 DRAW_LANDSLIDES = False
 
 
-def generate_explosion(height: int, width: int, rng: np.random.Generator | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Retorna (tensor B/W, mask categórica, heatmap de trayectoria), generados en un solo pase."""
+def generate_explosion(
+    height: int,
+    width: int,
+    rng: np.random.Generator | None = None,
+    observer=None,
+    progress_map: np.ndarray | None = None,
+    progress_ranges: list[tuple[float, float]] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Retorna (tensor B/W, mask categórica, heatmap de trayectoria), generados en un solo pase.
+
+    observer, progress_map y progress_ranges son los ganchos de la generación
+    temporal (ver sequence.py) y no alteran en nada la imagen resultante: con
+    los tres en None esta función produce exactamente lo mismo que antes de que
+    existieran, bit a bit y con el mismo consumo de rng.
+
+    observer(stage, tensor, mask, heatmap, ctx) se llama después de cada etapa
+    de dibujo, con el estado acumulado y un contexto con la geometría que esa
+    etapa necesita para fechar sus píxeles (la línea de tiro, el radio del
+    humo). Es lo que permite reconstruir la secuencia hacia atrás: la imagen se
+    dibuja UNA vez, completa, y el observador anota de dónde salió cada píxel.
+    """
     if rng is None:
         rng = np.random.default_rng()
+
+    def notify(stage: str, **ctx) -> None:
+        if observer is not None:
+            observer(stage, tensor, mask, heatmap, ctx)
 
     # Lienzo vacío en escala de grises + máscara de segmentación (0=fondo, 1=humo, 2=trayectoria)
     # + heatmap de gradiente para la clase trayectoria (0 = sin trayectoria, 255 = núcleo)
@@ -62,6 +85,7 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     # incondicional dentro de su geometría, así que el terreno solo queda como
     # fondo donde nada más lo cubre.
     draw_terrain(tensor, rng)
+    notify("terrain")
 
     # Zona de impacto: la fila de pozos cargados (ver canvas.py), con su punto
     # medio como origen. Antes era un cuadrilátero, que daba una pluma
@@ -86,6 +110,10 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     for center in centers:
         draw_center(tensor, center, rng.integers(0, 2), rng, mask, brightness_scale=brightness_scale)
 
+    # El fogonazo es lo primero que existe: en las referencias aparece completo
+    # en un solo frame y fija el máximo de brillo de toda la secuencia.
+    notify("blast", blast_line=blast_line, origin=origin)
+
     # Humo: radio proporcional al tamaño del lienzo
     base_length = min(height, width) * rng.uniform(0.25, 0.40)
     smoke_radius = base_length * rng.uniform(0.15, 0.3)
@@ -99,6 +127,7 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     # podría plantar el blob sobre una estría lejana y fina, desprendido de la
     # nube. Mismo problema que tuvo con el terreno en su momento.
     draw_white_blobs(tensor, smoke_radius, rng, mask)
+    notify("smoke", blast_line=blast_line, smoke_radius=smoke_radius)
 
     # Periferia filamentosa: estrías radiales desde la línea de tiro. Va después
     # de draw_smoke porque sus manchas sustractivas perforan todo lo que esté
@@ -108,6 +137,8 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     # ocultas dentro del núcleo. Ver trajectories.py::_SMOKE_OVERRIDE_PROB.
     filament_region = draw_smoke_filaments(tensor, blast_line, smoke_radius, rng, mask,
                                             brightness_scale=brightness_scale)
+    notify("filaments", blast_line=blast_line, smoke_radius=smoke_radius,
+           filament_region=filament_region)
 
     # Trayectorias de metralla (rectas + parabólicas de ida y vuelta + arcos
     # de sobrevuelo, fragmentos grandes que vuelan por encima de la nube)
@@ -115,7 +146,9 @@ def generate_explosion(height: int, width: int, rng: np.random.Generator | None 
     num_parabolic = rng.integers(15, 30)
     num_flyover = rng.integers(1, 4)
     draw_trajectories(tensor, centers, origin, num_straight, num_parabolic, rng, mask, heatmap, num_flyover,
-                       camouflage_scale=brightness_scale, filament_region=filament_region)
+                       camouflage_scale=brightness_scale, filament_region=filament_region,
+                       progress_map=progress_map, progress_ranges=progress_ranges)
+    notify("trajectories", num_trajectories=num_straight + num_parabolic + num_flyover)
 
     # Derrumbe: franjas de desprendimiento independientes de la explosión,
     # aproximadamente paralelas entre sí, con puntos de inicio propios
