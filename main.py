@@ -1,15 +1,17 @@
 """
 main.py - Punto de entrada del generador de dataset sintético de explosiones.
 
-Orquesta el pipeline completo de generación en un solo pase: crea el lienzo,
-genera la zona de impacto (cuadrilátero), distribuye centros de metralla,
-dibuja el humo con textura Perlin (más sub-nubes de humo blanco simulando
-brasas), traza franjas de derrumbe (opcional) y trayectorias rectas y
-parabólicas, y produce simultáneamente dos salidas:
+Orquesta el pipeline completo de generación en un solo pase: dibuja el terreno,
+crea el lienzo, genera la zona de impacto (cuadrilátero), distribuye centros de
+metralla, dibuja el humo con textura Perlin (más sub-nubes de humo blanco
+simulando brasas) y sus filamentos, traza franjas de derrumbe (opcional) y
+trayectorias rectas, parabólicas y de sobrevuelo, y produce simultáneamente dos
+salidas:
     - Imagen en escala de grises (entrada del dataset): el humo queda en
       gradiente continuo (más intenso cerca del centro de la explosión, más
-      tenue hacia el borde). Las trayectorias por ahora siguen dibujándose
-      a blanco pleno (255); su propio gradiente es un cambio pendiente.
+      tenue hacia el borde). Las trayectorias también tienen su propio brillo,
+      una gaussiana truncada en [2, 100] con la media sorteada por trayectoria
+      — no blanco pleno, ver _TRAJECTORY_BRIGHTNESS_RANGE en trajectories.py.
     - Máscara en PNG RGB (salida del dataset): fondo/humo/derrumbe con color
       plano (rojo/verde/amarillo); la trayectoria con gradiente real de azul
       (intenso al centro, tenue hacia el borde), vía el canal heatmap.

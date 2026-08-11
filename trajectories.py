@@ -363,9 +363,11 @@ def _progress_window(launch: float, duration: float) -> tuple[float, float]:
     una sola imagen.
 
     El lanzamiento se adelanta si con el sorteado la trayectoria no alcanzaría a
-    completarse: una trayectoria que quedara a medias en el último frame haría
-    que ese frame dejara de coincidir con la imagen que genera el pipeline sin
-    tiempo, que es la propiedad sobre la que se apoya todo sequence.py.
+    completarse: una trayectoria a medias dejaría fuera un pedazo de recorrido que
+    ningún frame llega a mostrar, y entonces la unión de la secuencia ya no
+    coincidiría con la imagen que genera el pipeline sin tiempo. Esa equivalencia
+    es la propiedad sobre la que se apoya todo sequence.py — en modo acumulado la
+    cumple el último frame, y en modo ventana la unión de todos.
     """
     if duration <= 0:
         return (0.0, 1.0)
@@ -380,8 +382,16 @@ def _stamp_progress(progress_map: np.ndarray, py: int, px: int, value: float) ->
 
     Es lo que permite armar la secuencia temporal retrocediendo (ver
     sequence.py): la explosión se dibuja completa UNA vez, igual que siempre, y
-    este mapa dice para cada píxel a partir de qué frame existe. El frame t es
-    la imagen final menos todo lo que nace después de t.
+    este mapa dice para cada píxel en qué momento aparece. De ahí salen las dos
+    lecturas: el frame t es lo que nace en su tramo (modo ventana, el del
+    dataset) o todo lo nacido hasta t (modo acumulado).
+
+    Ojo si se usa para el modo ventana: este mapa guarda una sola fecha por
+    píxel, la más temprana. Donde dos trayectorias se cruzan, la segunda pasada
+    no queda registrada — el píxel aparece en la ventana de la primera. No se
+    pierde tinta (la unión de las ventanas cubre exactamente el acumulado, está
+    verificado), pero un guion puede quedar con un hueco de pocos píxeles en un
+    cruce. No se midió cuánto ocurre en la práctica.
 
     Que sea el momento del RECORRIDO y no el brillo es el punto: en las
     referencias reales una trayectoria parcial es un trazo truncado —la punta
