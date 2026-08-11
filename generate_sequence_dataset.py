@@ -2,44 +2,53 @@
 # Generación masiva del dataset temporal.
 #
 # A diferencia de generate_dataset.py, que produce una imagen final por
-# explosión, acá cada explosión produce una SECUENCIA completa: del terreno
-# vacío pre-explosión hasta la vista final. Ver sequence.py para el porqué y
-# para la semántica exacta (acumulación monótona, nada se apaga nunca).
+# explosión, acá cada explosión produce una SECUENCIA por ventanas: cada frame
+# muestra solo lo que nace en su tramo, no el acumulado. Ver sequence.py para la
+# semántica exacta.
 #
-# Estructura de salida, una carpeta por secuencia dentro de inputs/ y targets/:
+# La unidad de entrenamiento es un BLOQUE de BLOCK_SIZE frames consecutivos, que
+# el modelo recibe apilados como canales — (batch, 9, alto, ancho). Cada bloque
+# lleva UNA máscara: la unión de lo que muestran sus 9 frames.
+#
+# Estructura de salida, una carpeta de 9 entradas y un archivo de target por
+# bloque, con el mismo stem para que la correspondencia sea obvia:
 #
 #     dataset_sequences/
-#         inputs/00000/000.png, 001.png, ...   → escala de grises
-#         targets/00000/000.png, 001.png, ...  → máscaras RGB
+#         inputs/00000_00/000.png ... 008.png   → 9 canales, escala de grises
+#         targets/00000_00.png                  → 1 máscara RGB del bloque
 #
-# Se mantiene inputs/ y targets/ arriba, como en generate_dataset.py, para que
-# el repo hermano no tenga que cambiar de convención: lo único nuevo es el nivel
-# de carpeta por secuencia.
-#
-# El último frame de cada secuencia es exactamente la imagen que produciría
-# generate_dataset.py con la misma semilla, así que un dataset de secuencias
-# contiene al de imagen única como caso particular.
+# Por qué el target es la unión del bloque y no el acumulado desde el principio:
+# cada bloque es una pasada independiente del modelo, que no vio los bloques
+# anteriores. Pedirle el acumulado sería pedirle que recuerde algo que no está
+# en su entrada. Si producción quiere un heatmap corrido, acumula las salidas
+# del modelo — que es exactamente lo que hacía el script de video antes de que
+# se separaran las ventanas.
 
 import os
 from multiprocessing import Pool
 from tqdm import tqdm
 
+import numpy as np
+
 from main import HEIGHT, WIDTH
 from sequence import generate_explosion_sequence
 from export import tensor_to_image, mask_to_rgb
 
-# Secuencias, NO imágenes: cada una produce ~29 frames, así que son ~87.000 pares
-# imagen/máscara (~5.7 GB). El dataset de imagen única tenía 10.000 explosiones en
-# 10.000 imágenes; acá lo que se mantiene alto a propósito es la variedad de
+# Secuencias, NO imágenes: cada una produce NUM_FRAMES_RANGE frames (90, fijo) y
+# de ahí salen 10 bloques. Lo que se mantiene alto a propósito es la variedad de
 # EXPLOSIONES, porque los frames de una misma secuencia están muy correlacionados
-# entre sí y aportan poco de a uno. Bajar esto a 346 para conservar "10.000
-# imágenes" dejaría al modelo viendo el mismo terreno 29 veces.
+# y aportan poco de a uno.
 #
-# 3.000 y no 10.000 porque una época escala con el total de frames: con 10.000
-# secuencias cada época tarda 29x más que en v20, y no vale comprometerse a eso
-# antes de saber si el enfoque temporal sirve. Escalar después es regenerar.
+# A 44.3 KB por par: 3.000 secuencias son 270.000 pares y ~12 GB. Conviene medir
+# el tiempo por época antes de comprometerse a ese tamaño — 500 secuencias son
+# 45.000 pares y 2 GB, y alcanzan para saber si el formato sirve.
 TOTAL_SEQUENCES = 3_000
 DATASET_DIR = "dataset_sequences"
+
+# Frames que entran juntos como canales del tensor. NUM_FRAMES_RANGE en
+# sequence.py es múltiplo de esto a propósito, así que ninguna secuencia deja
+# frames colgando sin bloque.
+BLOCK_SIZE = 9
 
 # Desfase entre la semilla de la explosión y la de su estructura temporal. Son
 # dos streams separados (ver generate_explosion_sequence): con el mismo índice
@@ -47,28 +56,51 @@ DATASET_DIR = "dataset_sequences"
 _TIME_SEED_OFFSET = 10_000_000
 
 
-def generate_single(index: int) -> int:
-    """Worker: genera una secuencia completa y la guarda a disco."""
-    import numpy as np
+def _block_union(block):
+    """Máscara y heatmap del bloque: lo que muestran sus frames juntos.
 
+    Un píxel puede aparecer en más de un frame con clases distintas —una
+    trayectoria que pasa por donde antes hubo humo— y gana el más tardío, que es
+    el último evento que ocurrió ahí dentro del bloque. Por eso se copian mask y
+    heatmap juntos, ceros incluidos: el evento nuevo reemplaza al viejo entero.
+
+    Un píxel cuenta como tocado si tiene mask O heatmap, no solo mask: mask_to_rgb
+    escribe la clase trayectoria desde `heatmap > 0`, y hay ~16.700 píxeles por
+    secuencia con heatmap sin mask. Filtrando solo por mask, esos quedaban como
+    fondo acá y como trayectoria en el target de imagen única — dos etiquetas
+    distintas para el mismo píxel según el formato.
+    """
+    mask = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
+    heatmap = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
+    for _, m, h in block:
+        tocado = (m > 0) | (h > 0)
+        mask[tocado] = m[tocado]
+        heatmap[tocado] = h[tocado]
+    return mask, heatmap
+
+
+def generate_single(index: int) -> int:
+    """Worker: genera una secuencia, la corta en bloques y los guarda a disco."""
     frames = generate_explosion_sequence(
         HEIGHT, WIDTH,
         np.random.default_rng(index),
         np.random.default_rng(_TIME_SEED_OFFSET + index),
     )
 
-    name = f"{index:05d}"
-    input_dir = os.path.join(DATASET_DIR, "inputs", name)
-    target_dir = os.path.join(DATASET_DIR, "targets", name)
-    os.makedirs(input_dir, exist_ok=True)
-    os.makedirs(target_dir, exist_ok=True)
+    blocks = len(frames) // BLOCK_SIZE
+    for b in range(blocks):
+        block = frames[b * BLOCK_SIZE:(b + 1) * BLOCK_SIZE]
+        name = f"{index:05d}_{b:02d}"
 
-    for i, (tensor, mask, heatmap) in enumerate(frames):
-        filename = f"{i:03d}.png"
-        tensor_to_image(tensor, os.path.join(input_dir, filename))
-        mask_to_rgb(mask, heatmap, os.path.join(target_dir, filename))
+        input_dir = os.path.join(DATASET_DIR, "inputs", name)
+        os.makedirs(input_dir, exist_ok=True)
+        for i, (tensor, _, _) in enumerate(block):
+            tensor_to_image(tensor, os.path.join(input_dir, f"{i:03d}.png"))
 
-    return len(frames)
+        mask, heatmap = _block_union(block)
+        mask_to_rgb(mask, heatmap, os.path.join(DATASET_DIR, "targets", f"{name}.png"))
+
+    return blocks
 
 
 def main():
@@ -76,16 +108,17 @@ def main():
     os.makedirs(os.path.join(DATASET_DIR, "targets"), exist_ok=True)
 
     workers = max(1, os.cpu_count() - 2)
-    print(f"Generando {TOTAL_SEQUENCES} secuencias con {workers} workers...")
+    print(f"Generando {TOTAL_SEQUENCES} secuencias de bloques de {BLOCK_SIZE} "
+          f"con {workers} workers...")
 
-    total_frames = 0
+    total_blocks = 0
     with Pool(processes=workers) as pool:
-        for num_frames in tqdm(pool.imap_unordered(generate_single, range(TOTAL_SEQUENCES)),
-                               total=TOTAL_SEQUENCES, desc="Generando", unit="seq"):
-            total_frames += num_frames
+        for blocks in tqdm(pool.imap_unordered(generate_single, range(TOTAL_SEQUENCES)),
+                           total=TOTAL_SEQUENCES, desc="Generando", unit="seq"):
+            total_blocks += blocks
 
-    print(f"Dataset generado: {TOTAL_SEQUENCES} secuencias, {total_frames} frames "
-          f"({total_frames / TOTAL_SEQUENCES:.1f} por secuencia).")
+    print(f"Dataset generado: {TOTAL_SEQUENCES} secuencias, {total_blocks} bloques, "
+          f"{total_blocks * BLOCK_SIZE} imágenes de entrada.")
 
 
 if __name__ == "__main__":

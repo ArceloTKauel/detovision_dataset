@@ -1,27 +1,40 @@
 """
 sequence.py - Generación temporal del dataset, por retroceso desde la imagen final.
 
-Las referencias reales no son fotos de instantes sino un MÁXIMO ACUMULADO desde
-el frame 0 con ventana creciente (ver video_diff_heatmap_progressive.py en
-detovision_segmentation): una imagen cada 60 frames, y nada se apaga nunca. Está
-verificado sobre las secuencias reales: entre una imagen y la siguiente, cero
-píxeles bajan de valor. La última imagen de una secuencia es exactamente lo que
-genera este pipeline hoy.
+La explosión se dibuja completa UNA sola vez —el mismo pase de siempre, sin tocar
+nada— anotando para cada píxel a partir de qué frame existe. Con ese fechado por
+píxel, un frame se arma eligiendo qué rebanada mostrar, y hay dos lecturas del
+mismo dato:
 
-De ahí la estrategia: en vez de simular la explosión hacia adelante, se dibuja la
-imagen final UNA sola vez —el mismo pase de siempre, sin tocar nada— anotando
-para cada píxel a partir de qué frame existe, y después se retrocede. El frame t
-es la imagen final menos todo lo que nace después de t. Dos consecuencias que
-valen el diseño:
+    - VENTANA (windowed=True, el modo del dataset): el frame t muestra solo lo
+      que nace en su tramo. Una trayectoria es un guion corto que se desplaza, y
+      lo que se dibujó antes ya no está. Es lo que produce el heatmap de video
+      cuando el acumulador se vacía en cada corte, y es lo que hace que apilar
+      frames tenga información: con el acumulado el frame t contiene entero al
+      t-1, así que comparar dos canales no dice nada nuevo.
+    - ACUMULADO (windowed=False): el frame t es la imagen final menos todo lo que
+      nace después de t. Es la lectura con la que nació este archivo; se conserva
+      para comparar y porque su último frame es bit a bit lo que produce
+      main.generate_explosion con el mismo rng.
 
-    - el último frame es bit a bit lo que produce main.generate_explosion, así
-      que la generación temporal no arriesga nada de lo ya validado;
-    - la monotonía sale por construcción, no hay que forzarla.
+En modo ventana ningún frame contiene la explosión entera, así que esa
+equivalencia bit a bit no vale frame a frame — vale para la vista que devuelve
+return_final, y está verificado. Lo que sí se comprobó del modo ventana es que la
+unión de todos los frames cubre exactamente el acumulado: cero píxeles perdidos y
+cero de más.
+
+La trampa si alguien lo rehace: el "cuándo nace cada píxel" hay que capturarlo
+MIENTRAS se dibuja. Deducirlo después desde la imagen final y su máscara es
+imposible, porque la máscara no distingue una trayectoria de otra ni en qué orden
+se recorrió.
 
 Lo que se midió en las referencias y está codificado acá:
 
     - 29-50% de cada secuencia es PRE-EXPLOSIÓN, puro terreno (V3 6/15, V4 5/13,
-      V7 7/14, V11 4/14). Es la señal que hoy le falta al dataset.
+      V7 7/14, V11 4/14). Acá va más bajo a propósito: ver
+      PRE_IGNITION_FRACTION_RANGE, que explica por qué la proporción de frames
+      pre-explosión es una decisión de muestreo nuestra y no una propiedad del
+      dominio.
     - El terreno no nace, se INTENSIFICA: las mismas curvas de nivel desde el
       primer frame, ganando contraste hasta saturar cerca de la ignición. Por eso
       lleva una rampa escalar y no un mapa de nacimiento.
@@ -35,12 +48,19 @@ Lo que se midió en las referencias y está codificado acá:
 
 Funciones:
     - generate_explosion_sequence(height, width, rng, time_rng): lista de
-      (tensor, mask, heatmap), una por frame.
-    - main(): escribe una secuencia de ejemplo en el directorio actual
-      (sequence_NN.png + sequence_NN_mask.png) más dos contact sheets para
-      revisar la progresión completa de un vistazo.
+      (tensor, mask, heatmap), una por frame. Con return_final=True devuelve
+      además la vista acumulada completa, que es el target denso de un bloque.
+    - main(): escribe una secuencia de ejemplo en sequence/ y sequence_mask/,
+      con el contact sheet y la vista final dentro de cada carpeta.
+
+Uso de la vista previa:
+    uv run python sequence.py                 explosión al azar
+    uv run python sequence.py 7               semilla fija, para comparar cambios
+    uv run python sequence.py 7 36            largo distinto sin tocar la constante
+    uv run python sequence.py 7 36 acc        el mismo caso en modo acumulado
 """
 
+import os
 import sys
 
 import numpy as np
@@ -52,8 +72,24 @@ from export import tensor_to_image, mask_to_rgb, contact_sheet
 # referencias reales) y sin esto las miniaturas se ven negras.
 SHEET_BRIGHTNESS = 3.5
 
-# Largo de la secuencia. Las reales tienen 13-15 imágenes útiles.
-NUM_FRAMES_RANGE = (26, 32)
+# Carpetas de la vista previa: los frames de una corrida van separados de sus
+# máscaras, en vez de intercalados en la raíz del repo. Cada una lleva adentro
+# su propio contact sheet.
+PREVIEW_DIR = "sequence"
+PREVIEW_MASK_DIR = "sequence_mask"
+
+# Largo de la secuencia: fijo, y múltiplo de los 9 frames que entran juntos como
+# canales del tensor. 90 son 10 bloques exactos, así que ninguna secuencia deja
+# frames colgando sin bloque. Fijo y no sorteado porque un largo variable daría
+# bloques incompletos al final.
+#
+# El precio, medido sobre la semilla 7: repartir la tinta de una explosión entre
+# 90 ventanas deja cada frame en 0.107% de trayectoria y 0.090% de humo, y de los
+# 10 bloques los tres primeros salen casi sin trayectoria (0.00, 0.00 y 0.01%).
+# Con 9 frames el target del único bloque queda en 9.61%. Si hace falta densidad
+# por bloque, la palanca no es este número sino la cantidad de trayectorias por
+# explosión en main.py.
+NUM_FRAMES_RANGE = (90, 90)
 
 # Fracción de la secuencia anterior a la ignición.
 #
@@ -239,14 +275,33 @@ def generate_explosion_sequence(
     rng: np.random.Generator | None = None,
     time_rng: np.random.Generator | None = None,
     num_frames: int | None = None,
-) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
-    """Secuencia acumulada de una explosión: lista de (tensor, mask, heatmap),
-    una por frame, del terreno vacío hasta la explosión completa.
+    windowed: bool = True,
+    return_final: bool = False,
+):
+    """Secuencia de una explosión: lista de (tensor, mask, heatmap), una por
+    frame, del terreno vacío hasta la explosión completa.
 
-    El último elemento es exactamente lo que devuelve generate_explosion con el
-    mismo `rng`. `time_rng` es un generador aparte a propósito: sortear la
-    estructura temporal con el rng principal correría su stream y cambiaría la
-    explosión, rompiendo esa equivalencia.
+    Con `windowed=True` (el modo del dataset) cada frame muestra SOLO lo que nace
+    en su tramo: una trayectoria es un guion corto que se desplaza, no un trazo
+    que se alarga sobre el anterior. Es lo que produce el heatmap de video cuando
+    el acumulador se vacía en cada corte, y es lo que hace que apilar frames
+    tenga información — con el acumulado, el frame t contiene entero al t-1 y
+    comparar dos canales no dice nada nuevo.
+
+    Con `windowed=False` se recupera el acumulado: cada frame es todo lo nacido
+    hasta ese momento. Sirve para comparar y para la propiedad de validación: el
+    último elemento es exactamente lo que devuelve generate_explosion con el
+    mismo `rng`. En modo ventana esa equivalencia NO vale (ningún frame contiene
+    la explosión entera); lo que sigue valiendo es que la unión de todos los
+    frames la reconstruye.
+
+    Con `return_final=True` devuelve `(frames, final)` en vez de solo `frames`,
+    donde `final` es la vista acumulada completa — la unión de todo lo que la
+    secuencia repartió entre sus frames.
+
+    `time_rng` es un generador aparte a propósito: sortear la estructura temporal
+    con el rng principal correría su stream y cambiaría la explosión, rompiendo
+    esa equivalencia.
     """
     if rng is None:
         rng = np.random.default_rng()
@@ -273,53 +328,103 @@ def generate_explosion_sequence(
     terrain = recorder.terrain.astype(np.float32)
     layers = recorder.finalize()
 
-    frames = []
-    for t in range(num_frames):
+    def compose(t: int, only_window: bool):
+        """Arma un frame aplicando las capas fechadas sobre el terreno.
+
+        `only_window` elige cómo se lee el mismo fechado: prefijo (todo lo nacido
+        hasta t) o banda (solo lo nacido en este tramo). El dato de cuándo nace
+        cada píxel ya lo dejó finalize().
+        """
         tensor = (terrain * ramp[t]).astype(np.uint8)
         mask = np.zeros((height, width), dtype=np.uint8)
         heatmap = np.zeros((height, width), dtype=np.uint8)
 
         for birth, layer_tensor, layer_mask, layer_heatmap in layers:
-            born = birth <= t
-            tensor[born] = layer_tensor[born]
-            mask[born] = layer_mask[born]
-            heatmap[born] = layer_heatmap[born]
+            visible = ((birth > t - 1) & (birth <= t)) if only_window else (birth <= t)
+            tensor[visible] = layer_tensor[visible]
+            mask[visible] = layer_mask[visible]
+            heatmap[visible] = layer_heatmap[visible]
 
         # Mismo saneo que generate_explosion: humo que quedó en negro puro no es
         # humo. Se repite por frame porque el recorte temporal puede dejar en
         # negro píxeles que en la imagen final sí tenían tinta.
         mask[(tensor == 0) & (mask == 1)] = 0
-        frames.append((tensor, mask, heatmap))
+        return tensor, mask, heatmap
 
-    return frames
+    frames = [compose(t, windowed) for t in range(num_frames)]
+    if not return_final:
+        return frames
+
+    # Vista final: el acumulado completo, o sea todo lo que la secuencia llegó a
+    # mostrar repartido entre sus frames. Es bit a bit lo que devuelve
+    # generate_explosion con el mismo rng, y sirve de target denso para una
+    # entrada de N ventanas — que es la única forma de conservar el balance de
+    # clases de v20 sin renunciar a la señal temporal en la entrada.
+    return frames, compose(num_frames - 1, False)
+
+
+def _reset_preview_dir(path: str) -> None:
+    """Deja la carpeta de vista previa vacía de .png antes de escribir.
+
+    El largo de la secuencia varía entre corridas (NUM_FRAMES_RANGE), así que sin
+    esto una corrida corta deja atrás los frames sobrantes de una larga anterior y
+    el contact sheet siguiente se compara contra una mezcla de dos explosiones.
+    """
+    os.makedirs(path, exist_ok=True)
+    for name in os.listdir(path):
+        if name.endswith(".png"):
+            os.remove(os.path.join(path, name))
 
 
 def main():
     # Semilla opcional por línea de comandos: sin ella cada corrida da una
     # explosión distinta, con ella se repite la misma — que es lo que hace falta
     # para comparar el efecto de un cambio de parámetro entre dos corridas.
+    #
+    # Segundo argumento opcional: largo de la secuencia, para comparar la misma
+    # explosión contada en distinta cantidad de frames sin tocar
+    # NUM_FRAMES_RANGE. Sin él se sortea como siempre.
+    #
+    # Tercer argumento "acc": vuelve al render acumulado, para poder mirar la
+    # misma explosión en los dos modos sin tocar código.
     seed = int(sys.argv[1]) if len(sys.argv) > 1 else None
+    num_frames = int(sys.argv[2]) if len(sys.argv) > 2 else None
+    windowed = "acc" not in sys.argv[1:]
     if seed is None:
-        frames = generate_explosion_sequence(HEIGHT, WIDTH)
+        frames, final = generate_explosion_sequence(HEIGHT, WIDTH, num_frames=num_frames,
+                                                    windowed=windowed, return_final=True)
     else:
-        frames = generate_explosion_sequence(HEIGHT, WIDTH,
-                                             np.random.default_rng(seed),
-                                             np.random.default_rng(1000 + seed))
-        print(f"semilla {seed}")
+        frames, final = generate_explosion_sequence(HEIGHT, WIDTH,
+                                                    np.random.default_rng(seed),
+                                                    np.random.default_rng(1000 + seed),
+                                                    num_frames=num_frames,
+                                                    windowed=windowed, return_final=True)
+        print(f"semilla {seed}" + (f", {num_frames} frames" if num_frames else "")
+              + (", ventana" if windowed else ", acumulado"))
+
+    _reset_preview_dir(PREVIEW_DIR)
+    _reset_preview_dir(PREVIEW_MASK_DIR)
 
     tensor_paths, mask_paths = [], []
     for i, (tensor, mask, heatmap) in enumerate(frames):
-        tensor_path = f"sequence_{i:02d}.png"
-        mask_path = f"sequence_{i:02d}_mask.png"
+        tensor_path = os.path.join(PREVIEW_DIR, f"{i:02d}.png")
+        mask_path = os.path.join(PREVIEW_MASK_DIR, f"{i:02d}.png")
         tensor_to_image(tensor, tensor_path)
         mask_to_rgb(mask, heatmap, mask_path)
         tensor_paths.append(tensor_path)
         mask_paths.append(mask_path)
 
-    contact_sheet(tensor_paths, "sequence_sheet.png", SHEET_BRIGHTNESS)
-    contact_sheet(mask_paths, "sequence_sheet_mask.png")
-    print(f"{len(frames)} frames -> sequence_NN.png / sequence_NN_mask.png")
-    print("resumen -> sequence_sheet.png / sequence_sheet_mask.png")
+    # Vista final acumulada, fuera de la numeración de los frames: es el target
+    # denso del bloque, no un frame más de la secuencia.
+    final_tensor, final_mask, final_heatmap = final
+    tensor_to_image(final_tensor, os.path.join(PREVIEW_DIR, "final.png"))
+    mask_to_rgb(final_mask, final_heatmap, os.path.join(PREVIEW_MASK_DIR, "final.png"))
+
+    contact_sheet(tensor_paths, os.path.join(PREVIEW_DIR, "sheet.png"), SHEET_BRIGHTNESS)
+    contact_sheet(mask_paths, os.path.join(PREVIEW_MASK_DIR, "sheet.png"))
+    print(f"{len(frames)} frames -> {PREVIEW_DIR}/NN.png / {PREVIEW_MASK_DIR}/NN.png")
+    print(f"final    -> {PREVIEW_DIR}/final.png / {PREVIEW_MASK_DIR}/final.png")
+    print(f"resumen  -> {PREVIEW_DIR}/sheet.png / {PREVIEW_MASK_DIR}/sheet.png")
 
 
 if __name__ == "__main__":
