@@ -139,10 +139,24 @@ def _sample_trajectory_width(rng: np.random.Generator) -> int:
 # un brillo absoluto propio, sino que se lee POR CONTRASTE sobre el humo local
 # — de ahí que el piso sea relativo a tensor[ny, nx] y no un valor fijo.
 #
-# _SMOKE_OVERRIDE_PROB en 1.0: toda trayectoria que cruce la periferia fibrosa
-# se ve. Queda como constante y no cableado porque es la dosis del cambio, y
+# Dosis del mecanismo: fracción de las trayectorias que cruzan la periferia
+# fibrosa y se ven por encima de ella. Queda como constante y no cableado porque
 # bajarlo es la forma de aflojarlo sin tocar la geometría.
-_SMOKE_OVERRIDE_PROB = 1.0
+#
+# Bajado de 1.0 a 0.5 el 2026-08-11. Medido sobre 20 semillas, con 1.0 los pelos
+# eran el 11.8% del humo que habría sin ellos (rango 7.8-16.0%) — prácticamente
+# el mismo tamaño de intervención que el 12% de estrías que reclasificó v19, que
+# produjo -46% a -63% de humo en las predicciones sobre imágenes reales. Y v20,
+# entrenado con 1.0, da -58.9% de humo en ESS_F04 (la referencia que más ejercita
+# el mecanismo) con la razón trayectoria/humo en 1.433 contra 0.532 de v18 —
+# dentro del rango de v19. La comparación v18/v20 es limpia: sus pesos de
+# entrenamiento son casi iguales (razón trayectoria/fondo 5.7 contra 5.5) y el
+# único cambio de dataset entre ambos es este mecanismo.
+#
+# O sea que el TAMAÑO de la intervención pesa tanto como su coherencia lógica:
+# que la regla sea geométrica y no un sorteo sobre textura idéntica (que era la
+# justificación para reponer los pelos tras v19) no alcanzó por sí solo.
+_SMOKE_OVERRIDE_PROB = 0.5
 # Cuánto se levanta el pelo por encima del humo local. Calibrado contra el
 # contraste local (píxel menos la mediana de su vecindario 7x7) de la
 # estructura fina DENTRO de la pluma en ESS_F04: p90=+10, p99=+26, max=+118.
@@ -166,10 +180,21 @@ def _sample_smoke_override(rng: np.random.Generator) -> tuple[bool, int]:
     cuánto contraste sobre el humo local.
 
     Consume siempre los dos sorteos, aunque el primero salga negativo, para que
-    cambiar _SMOKE_OVERRIDE_PROB no desplace el stream del rng: así dos
-    corridas con distinta dosis y la misma semilla comparten la geometría de
-    todas las trayectorias y la diferencia medida es solo el efecto del
-    override, no otra explosión distinta."""
+    cambiar _SMOKE_OVERRIDE_PROB no desplace el stream del rng ACÁ.
+
+    OJO, esa garantía NO llega hasta el final: el bucle de dibujo de cada
+    trayectoria sortea por oportunidad de dibujo (erase, burst, spacing), y
+    cuántas veces lo hace depende de si la trayectoria se ve sobre el humo. Desde
+    la primera trayectoria afectada el stream se desfasa y las siguientes caen en
+    otro lado. Verificado el 2026-08-11 con la misma semilla a dosis 1.0 y 0.0:
+    terreno, blast, humo y filamentos salen bit a bit idénticos, pero de los
+    ~38.000 píxeles clase 2 solo 3.500-6.300 coinciden entre las dos corridas.
+
+    O sea que NO se puede hacer un A/B por imagen cambiando solo esta constante:
+    la diferencia mezcla el efecto del override con otro sorteo de trayectorias.
+    Para medir el mecanismo hay que hacerlo sobre UNA corrida — contar los
+    píxeles clase 2 que caen dentro de `filament_region`, que es exactamente lo
+    que el override convierte de humo en trayectoria."""
     hit = rng.random() < _SMOKE_OVERRIDE_PROB
     contrast = int(rng.uniform(*_SMOKE_OVERRIDE_CONTRAST_RANGE))
     return hit, (contrast if hit else 0)
