@@ -46,6 +46,47 @@ SMOKE_BRIGHTNESS_SCALE_RANGE = (0.45, 0.70)
 # baja a propósito (ver _HOT_FLECK_PROB).
 _SMOKE_BRIGHTNESS_FLOOR = 15
 
+# ── Forma lobulada de la pluma ─────────────────────────────────────────────
+# El equipo marcó que el humo "parece un souffle de queso o ameba" y que debería
+# parecerse más a "una nube dibujada por un niño". Comparadas las vistas
+# acumuladas contra las referencias reales, la diferencia es concreta: la nube
+# real es una COLIFLOR de bultos redondos de tamaños distintos, y la nuestra un
+# contorno liso y cerrado.
+#
+# _SMOKE_LINE_RADIUS_FRAC es el grosor del cuerpo que envuelve la fila de pozos,
+# como fracción de smoke_radius. Es el piso de la forma: sin él los lóbulos
+# quedarían sueltos y la pluma no naciría de la línea de tiro.
+#
+# Los lóbulos se plantan sobre un pozo al azar y se empujan de ahí. Sus radios
+# van de _SMOKE_LOBE_RADIUS: el rango es ancho a propósito, porque lo que da la
+# lectura de coliflor es la MEZCLA de tamaños, no los bultos en sí.
+#
+# Valores de primer intento, puestos para mirarlos y ajustar — no hay medición
+# detrás todavía, a diferencia del resto de las constantes de este repo.
+_SMOKE_LINE_RADIUS_FRAC = 0.45
+_SMOKE_LOBE_COUNT = (6, 14)
+_SMOKE_LOBE_RADIUS = (0.35, 0.95)
+_SMOKE_LOBE_OFFSET = (0.0, 0.55)
+
+# Reborde de cada lóbulo. Es lo que separa una coliflor de una mancha.
+#
+# Los lóbulos solos no alcanzaron: sin reborde, más lóbulos dan una mancha más
+# ancha y nada más. En las referencias cada cabeza tiene un borde nítido y claro
+# con el cuerpo más oscuro detrás, y eso es lo que se lee como volumen.
+#
+# El reborde se calcula por lóbulo y se toma el MÁXIMO, no el mínimo como la
+# silueta: así se encienden también los bordes INTERNOS, los de un lóbulo que
+# queda por delante de otro. Con el mínimo solo se vería el contorno exterior de
+# la unión y volveríamos a la mancha.
+#
+# _SMOKE_RIM_WIDTH es el ancho de la banda, en unidades del radio del lóbulo.
+# _SMOKE_RIM_CONTRAST es cuánto se oscurece el cuerpo respecto del reborde: 0 lo
+# desactiva, 1 deja el cuerpo en negro.
+#
+# Valores de primer intento, para mirar y ajustar.
+_SMOKE_RIM_WIDTH = 0.18
+_SMOKE_RIM_CONTRAST = 0.55
+
 # Flecos brillantes: chispas/reflejos puntuales muy poco frecuentes que
 # rompen por encima del techo habitual del humo (~180) hasta casi blanco
 # pleno, independientes de brightness_scale (si no, nunca podrían acercarse
@@ -114,11 +155,52 @@ def draw_smoke(
     # Grilla de coordenadas de la región
     ys, xs = np.mgrid[min_y:max_y, min_x:max_x]
 
-    # Para cada píxel, calcular la distancia mínima a cualquier centro
-    min_dist = np.full(ys.shape, np.inf)
+    # Forma de la pluma: unión de LÓBULOS de radios distintos, no una salchicha.
+    #
+    # Antes esto era la distancia al centro más cercano de la fila de pozos, o
+    # sea la curva paralela a la línea de tiro, ondulada después por un Perlin
+    # suave de ±30%. Eso da un contorno liso y cerrado — el "ameba" que marcó el
+    # equipo. En las referencias reales la nube es una COLIFLOR: muchos bultos
+    # redondos de tamaños distintos apilados, cada uno con su propia cabeza.
+    #
+    # Se resuelve con un campo NORMALIZADO: cada fuente aporta distancia/su
+    # radio, y se toma el mínimo. Una fuente chica genera un bulto chico y una
+    # grande uno grande, y la unión de todas da el borde lobulado. El campo se
+    # devuelve escalado a smoke_radius para que las zonas de abajo (core, mid,
+    # outer) sigan expresadas en fracciones del radio como siempre.
+    def banda_de_borde(d):
+        """Cuánto pesa el reborde a distancia normalizada `d` del centro de una
+        fuente: máximo justo sobre su borde (d = 1) y cae a los lados."""
+        return np.exp(-(((d - 1.0) / _SMOKE_RIM_WIDTH) ** 2))
+
+    line_radius = smoke_radius * _SMOKE_LINE_RADIUS_FRAC
+    normalized = np.full(ys.shape, np.inf)
     for cy, cx in centers:
-        dist = np.sqrt((ys - cy) ** 2 + (xs - cx) ** 2)
-        min_dist = np.minimum(min_dist, dist)
+        np.minimum(normalized, np.hypot(ys - cy, xs - cx) / line_radius, out=normalized)
+    rim = banda_de_borde(normalized)
+
+    # Lóbulos: se plantan sobre la línea de tiro y se desplazan de ella, para
+    # que la pluma siga naciendo de los pozos pero no quede simétrica respecto
+    # del eje.
+    #
+    # La silueta se acumula con MÍNIMO (la unión de los lóbulos) y el reborde con
+    # MÁXIMO: son dos operaciones distintas a propósito. Con el mínimo, el borde
+    # de un lóbulo tapado por otro desaparece; con el máximo se enciende igual, y
+    # eso es lo que dibuja las cabezas de adentro de la coliflor.
+    n_lobes = int(rng.integers(*_SMOKE_LOBE_COUNT, endpoint=True))
+    anchors = rng.integers(0, len(centers), size=n_lobes)
+    for anchor, frac, ang, push in zip(anchors,
+                                       rng.uniform(*_SMOKE_LOBE_RADIUS, size=n_lobes),
+                                       rng.uniform(0, 2 * np.pi, size=n_lobes),
+                                       rng.uniform(*_SMOKE_LOBE_OFFSET, size=n_lobes)):
+        ly = all_cy[anchor] + np.sin(ang) * push * smoke_radius
+        lx = all_cx[anchor] + np.cos(ang) * push * smoke_radius
+        d_lobe = np.hypot(ys - ly, xs - lx) / (frac * smoke_radius)
+        np.minimum(normalized, d_lobe, out=normalized)
+        np.maximum(rim, banda_de_borde(d_lobe), out=rim)
+
+    min_dist = normalized * smoke_radius
+    shading = (1.0 - _SMOKE_RIM_CONTRAST) + _SMOKE_RIM_CONTRAST * rim
 
     region = tensor[min_y:max_y, min_x:max_x]
     mask_region = mask[min_y:max_y, min_x:max_x] if mask is not None else None
@@ -132,7 +214,10 @@ def draw_smoke(
     # vez de un relleno plano). Se multiplica sobre el brillo de TODAS las
     # zonas junto con brightness_scale.
     grain = perlin_noise_2d((region_h, region_w), scale=smoke_radius * 0.05, rng=rng, octaves=2)
-    grain_factor = 0.55 + 0.45 * grain
+    # El sombreado por reborde entra acá, multiplicado junto con el grano, para
+    # que llegue a TODAS las zonas (core, seam, mid, outer) sin repetirlo cuatro
+    # veces. Ver _SMOKE_RIM_CONTRAST.
+    grain_factor = (0.55 + 0.45 * grain) * shading
 
     # Distorsión del radio: el Perlin desplaza el borde ±30%, creando irregularidad
     radius_distortion = 1.0 + (perlin - 0.5) * 0.6
