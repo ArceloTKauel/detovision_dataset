@@ -19,9 +19,13 @@ mismo dato:
 
 En modo ventana ningún frame contiene la explosión entera, así que esa
 equivalencia bit a bit no vale frame a frame — vale para la vista que devuelve
-return_final, y está verificado. Lo que sí se comprobó del modo ventana es que la
-unión de todos los frames cubre exactamente el acumulado: cero píxeles perdidos y
-cero de más.
+return_final, y está verificado.
+
+La unión de los frames tampoco reconstruye el acumulado píxel a píxel desde que
+el humo LLEGA repartido (ver SMOKE_ARRIVAL_PROFILE): un píxel de humo aparece en
+varios frames, cada uno con una fracción de su valor, y esas fracciones suman el
+valor original en vez de repetirlo. Para trayectorias y fogonazo, que siguen
+apareciendo completos en un solo frame, la propiedad vale como antes.
 
 La trampa si alguien lo rehace: el "cuándo nace cada píxel" hay que capturarlo
 MIENTRAS se dibuja. Deducirlo después desde la imagen final y su máscara es
@@ -35,12 +39,16 @@ Lo que se midió en las referencias y está codificado acá:
       PRE_IGNITION_FRACTION_RANGE, que explica por qué la proporción de frames
       pre-explosión es una decisión de muestreo nuestra y no una propiedad del
       dominio.
-    - El terreno no nace, se INTENSIFICA: las mismas curvas de nivel desde el
-      primer frame, ganando contraste hasta saturar cerca de la ignición. Por eso
-      lleva una rampa escalar y no un mapa de nacimiento.
+    - El terreno no nace ni se intensifica: DERIVA. Está desde el primer frame,
+      pero lo que entra en cada frame es el residuo de moverlo, no el terreno
+      entero — ver TERRAIN_DRIFT_RANGE. Por eso no lleva mapa de nacimiento sino
+      una posición de cámara por frame.
     - El fogonazo aparece COMPLETO en un solo frame y fija el máximo de brillo de
       toda la secuencia (V3 197 desde f420, V7 154 desde f480, V11 163 desde f360).
-    - El humo crece en radio de forma monótona, rápido al principio.
+    - El humo crece en radio de forma monótona, rápido al principio, y además
+      LLEGA a cada píxel repartido en 3-4 frames en vez de aparecer de golpe:
+      medido, el canal más fuerte de un píxel real de evento lleva la mitad de su
+      tinta, no toda. Ver SMOKE_ARRIVAL_PROFILE.
     - Una trayectoria parcial es un trazo TRUNCADO, no atenuado: la punta avanza
       y lo ya dibujado no cambia de brillo. Los lazos completos solo aparecen en
       los últimos frames porque el fragmento tarda decenas de frames en
@@ -107,12 +115,100 @@ NUM_FRAMES_RANGE = (90, 90)
 # modo de falla de v18, terreno predicho como humo (ver el repo de segmentación).
 PRE_IGNITION_FRACTION_RANGE = (0.15, 0.30)
 
-# Rampa del terreno: intensidad relativa en el primer frame, y en qué fracción
-# de los frames pre-ignición llega a 1.0 y se queda. En las referencias la
-# cobertura del terreno crece 3-10x durante la fase pre-explosión y después se
-# estabiliza.
-TERRAIN_RAMP_START = 0.40
-TERRAIN_RAMP_SATURATE_AT = 0.85
+# Deriva del terreno por frame, en píxeles: el ego-motion de la cámara.
+#
+# Un canal del dataset tiene que representar lo mismo que un `absdiff` entre dos
+# frames de video real, que es lo que produce video_diff_heatmap_blocks.py en el
+# repo del modelo. Por eso el terreno NO entra completo en cada frame: entra su
+# RESIDUO, o sea cuánto cambió al desplazarse la cámara. Medido el 2026-08-13
+# sobre el canal ya cuantizado a uint8, que es lo que va al PNG:
+#
+#   canal real (GAIN=1)         media 0.8-1.4   p50 0-1   p90 2-3   p99 5-7
+#
+#   barrido, SOLO terreno (16 semillas, sin componer la explosión):
+#   estático (lo de antes)      media 2.74      p50 0     p90 13    p99 24
+#   deriva (1.0, 2.0)           media 0.40      p50 0     p90 1     p99  5
+#   deriva (2.0, 3.0)           media 0.71      p50 0     p90 2     p99 10
+#   deriva (2.5, 3.5)           media 0.86      p50 0     p90 3     p99 13
+#
+#   secuencia entera (12 semillas, el canal tal como sale al PNG):
+#   deriva (2.0, 3.0)           media 0.92      p50 0     p90 3     p99 14
+#
+# El barrido de terreno solo sirve para ordenar candidatos, no para decidir: la
+# explosión es el 1.4% de la tinta pero llega a 255, así que sube la media un
+# 30% y engorda la cola. Lo que se compara contra el objetivo es la última fila.
+#
+# Se sortea por secuencia porque los videos reales tienen movimientos de cámara
+# distintos (Video 3 da p90 3, ESS_F04 da p90 2).
+#
+# Con (2.0, 3.0) la media y el p90 quedan dentro del objetivo y el p99 no: 14
+# contra 5-7. Nuestra cola superior es más pesada que la real porque las curvas
+# de nivel del terreno sintético son bordes duros, y desplazar un borde duro
+# devuelve su amplitud entera. Subir más la deriva no arregla eso —engorda la
+# cola más rápido de lo que mueve el centro— y bajarla saca la media del rango:
+# (1.0, 2.0), que era la elección inicial, da 0.52 de media medida así. Atacar la
+# cola de verdad pide ablandar el terreno (TERRAIN_BLUR_RADIUS /
+# TERRAIN_BLOTCH_MAX_VAL en terrain.py), que está calibrado contra el ancho de
+# línea de las máscaras reales y no se toca desde acá.
+#
+# Cuidado al re-medir: el terreno hay que sacarlo del pipeline (observer sobre la
+# etapa "terrain"), no llamando a _terrain_blotch_brightness aparte. Medido sobre
+# el campo suelto sin cuantizar, (1.0, 2.0) da media 0.69 en vez de 0.40 — o sea
+# que parecía estar en el objetivo cuando no lo estaba. Y con pocas semillas no
+# sirve: TERRAIN_INTENSITY_RANGE es (0.05, 1.0), o sea que el brillo del terreno
+# varía 20x entre imágenes y con 4-6 muestras la media la decide el sorteo.
+#
+# Por qué importaba: con el terreno completo en los 9 canales, el 95% de un canal
+# sintético estaba presente en TODOS los canales del bloque, contra el 4% del
+# real. La regla más fácil de aprender pasaba a ser "lo que no cambia es fondo",
+# y en las reales el terreno sí cambia entre frames — o sea que esa regla marca
+# el terreno real como evento, que es el modo de falla de v18.
+TERRAIN_DRIFT_RANGE = (2.0, 3.0)
+
+# Cuánto vira el rumbo de la cámara por frame, en radianes.
+#
+# No es un detalle de realismo, es lo que hace que los canales se diferencien:
+# el residuo es grande donde el desplazamiento cruza una curva de nivel y casi
+# nulo donde corre paralelo a ella. Con rumbo FIJO se encienden siempre las
+# mismas curvas y los 9 canales quedan casi iguales, que es justo el defecto que
+# este cambio viene a corregir. Con el rumbo virando, cada frame ilumina otras.
+#
+# El precio es que de vez en cuando el rumbo queda paralelo a las curvas y ese
+# frame sale casi vacío: en la semilla 7 el frame 5 da media 0.129 contra 1.012
+# de mediana, con el paso INTACTO (2.07, igual que todos). O sea que no es un
+# defecto del rebote —eso también pasa, el frame 44 de la misma semilla queda
+# flojo con paso 0.58— sino la respuesta correcta a un terreno de bandas
+# paralelas: una cámara que se mueve a lo largo de una curva de nivel no deja
+# residuo. Un rumbo casi fijo no lo arregla, lo empeora: en vez de un frame flojo
+# cada tanto daría secuencias enteras flojas, las que salgan sorteadas paralelas.
+TERRAIN_DRIFT_TURN_STD = 0.25
+
+# Caja dentro de la cual vagabundea la cámara, en píxeles desde el origen. Al
+# llegar al borde el rumbo REBOTA.
+#
+# Hace falta acotar porque si no la cámara se va: 90 frames a 1-2 px en un rumbo
+# más o menos sostenido son más de 100 px de corrimiento sobre un cuadro de 512,
+# y como los bordes se replican (un wraparound metería una costura), esa franja
+# replicada queda con residuo cero y crece frame a frame.
+#
+# Se acota rebotando y no tirando de la posición hacia el origen —que fue el
+# primer intento, un Ornstein-Uhlenbeck como el de landslide.py— porque ese tirón
+# le come el paso a la cámara: en el punto de equilibrio la reversión cancela
+# exactamente al paso y la cámara se FRENA. Medido a igual deriva (1.0, 2.0), la
+# reversión 0.15 daba media 0.21 y p90 0.0, contra 0.57 y 1.0 rebotando.
+#
+# El rebote sí acorta el paso, pero solo en el frame en que ocurre y poco: el
+# paso efectivo promedio es 1.37 con caja de 12 px contra 1.40 con caja de 100,
+# así que apretar la caja para achicar la franja de borde replicada no cuesta
+# nada medible.
+TERRAIN_DRIFT_MAX_OFFSET = 12.0
+
+# La RAMPA del terreno se eliminó junto con este cambio. Existía porque en las
+# referencias "la cobertura del terreno crece 3-10x durante la fase pre-explosión
+# y después se estabiliza", pero esa medición se hizo sobre heatmaps ACUMULADOS,
+# donde el terreno se suma frame a frame. En diferencias no aplica: una cámara
+# que deriva a ritmo parejo produce un residuo constante, no creciente. Mantenerla
+# habría sido arrastrar un artefacto de la representación anterior.
 
 # Crecimiento de la pluma. Un píxel a distancia r de la línea de tiro nace en
 # (r/alcance)**e del tramo post-ignición.
@@ -129,6 +225,38 @@ TERRAIN_RAMP_SATURATE_AT = 0.85
 # ve en las referencias.
 SMOKE_REACH_PERCENTILE = 98
 SMOKE_GROWTH_EXPONENT = 1.0
+
+# Cómo se reparte en el tiempo la LLEGADA del humo a un píxel.
+#
+# Un canal es un `absdiff`, así que lo que muestra no es el humo sino cuánto
+# cambió el humo en ese frame. Un píxel real no pasa de terreno a humo denso de
+# golpe: se densifica en varios frames y cada uno lleva su parte. Medido el
+# 2026-08-13 sobre ESS_F04 y Video 7, aislando la racha de canales consecutivos
+# encendidos de cada píxel de evento (max >= 40):
+#
+#                        ESS_F04      Video 7
+#   largo de la llegada  p50 4        p50 3      (p90 6 en los dos)
+#   tinta total          p50 82       p50 87
+#   pico dentro de ella  p50 44       p50 44
+#   pico/suma            0.51         0.50
+#   forma media          .22 .40 .21 .09 .05 .02 .01
+#                        .21 .36 .27 .10 .04 .02 .01
+#
+# El perfil es el promedio de esas dos formas, y suma 1.0: reparte la tinta del
+# píxel, no la crea ni la destruye. Por eso NO hubo que tocar el brillo del humo.
+# Nuestro píxel de humo vale 94 de mediana contra los 82-87 reales, o sea que la
+# tinta ya estaba bien; el defecto era entregarla toda junta. Repartida, el frame
+# más fuerte se lleva 0.38 * 94 = 36 contra los 44 reales.
+#
+# Eso además esquiva la tensión con el solape de brillo terreno/humo (el modo de
+# falla de v18): no hace falta bajar el humo hacia el rango del terreno por
+# decreto. Y coincide con lo que muestran las referencias, donde terreno y evento
+# conviven en el mismo rango bajo — ahí la separación no es por nivel.
+#
+# NO se aplica a trayectorias ni al fogonazo, a propósito: de esos dos hay
+# evidencia medida en contra en las referencias (trazo truncado y no atenuado; el
+# fogonazo aparece completo en un solo frame). Ver el docstring del módulo.
+SMOKE_ARRIVAL_PROFILE = (0.21, 0.38, 0.24, 0.09, 0.05, 0.02, 0.01)
 
 # Ventana en la que puede lanzarse una trayectoria, como fracción del tramo
 # post-ignición. El piso no es 0 porque en las referencias las trayectorias
@@ -190,6 +318,7 @@ class _StageRecorder:
         self.stages: list[dict] = []
         self._prev_tensor: np.ndarray | None = None
         self._prev_mask: np.ndarray | None = None
+        self._prev_heatmap: np.ndarray | None = None
 
     @property
     def _span(self) -> int:
@@ -197,18 +326,24 @@ class _StageRecorder:
 
     def __call__(self, stage, tensor, mask, heatmap, ctx) -> None:
         if stage == "terrain":
-            # El terreno no se fecha: se rampea. Se guarda aparte porque las
-            # manchas sustractivas de draw_smoke lo perforan a negro más
-            # adelante, y en los frames pre-explosión ese terreno tiene que
-            # verse — desde la imagen final sola sería irrecuperable.
+            # El terreno no se fecha: deriva (ver _terrain_drift). Se guarda
+            # aparte porque las manchas sustractivas de draw_smoke lo perforan a
+            # negro más adelante, y en los frames pre-explosión ese terreno tiene
+            # que verse — desde la imagen final sola sería irrecuperable.
             self.terrain = tensor.copy()
             self._prev_tensor = tensor.copy()
             self._prev_mask = mask.copy()
+            self._prev_heatmap = heatmap.copy()
             return
 
+        # El heatmap entra en `changed` aunque solo lo escriba draw_trajectories:
+        # hay píxeles donde la trayectoria deja etiqueta sin dejar tinta (el 73%
+        # de su recorrido, ver finalize) y sin esto quedarían fuera de su propia
+        # capa.
         self.stages.append({
             "name": stage,
-            "changed": (tensor != self._prev_tensor) | (mask != self._prev_mask),
+            "changed": ((tensor != self._prev_tensor) | (mask != self._prev_mask)
+                        | (heatmap != self._prev_heatmap)),
             "tensor": tensor.copy(),
             "mask": mask.copy(),
             "heatmap": heatmap.copy(),
@@ -216,6 +351,7 @@ class _StageRecorder:
         })
         self._prev_tensor = tensor.copy()
         self._prev_mask = mask.copy()
+        self._prev_heatmap = heatmap.copy()
 
     def finalize(self) -> list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
         """Convierte las etapas grabadas en capas fechadas."""
@@ -237,8 +373,26 @@ class _StageRecorder:
                 # del recorrido en que se alcanzó cada píxel, que trajectories.py
                 # anotó durante el dibujo. Es lo que hace que la trayectoria se
                 # retraiga por la punta en vez de desvanecerse entera.
+                #
+                # Pero se INTERSECA con `changed`, y ese detalle importa: el
+                # progress_map está definido en todo píxel por donde la
+                # trayectoria pasó, incluidos aquellos donde quedó oculta bajo el
+                # núcleo del humo (ver _SMOKE_OVERRIDE_PROB en trajectories.py).
+                # Ahí no dibujó nada, así que fecharlos hacía que compose
+                # reemitiera el HUMO a brillo pleno en el frame en que pasaba la
+                # trayectoria — un píxel que no cambió apareciendo como si
+                # hubiera cambiado. Medido el 2026-08-13 sobre el recorrido:
+                #
+                #   11.6%  la trayectoria cambió el tensor (visible)  p50  52
+                #   73.4%  solo dejó etiqueta, sin tinta              p50   0
+                #   14.9%  no cambió NADA (oculta bajo el humo)       p50  72, 29.5% > 100
+                #
+                # Ese último tramo era la mitad de los píxeles > 100 del canal.
+                # El del medio se conserva a propósito: es el caso conocido de
+                # etiqueta sin evidencia visible, es oscuro (max 40) y sacarlo
+                # sería otra decisión.
                 progress = s["ctx"]["progress_map"]
-                birth = np.where(np.isfinite(progress),
+                birth = np.where(np.isfinite(progress) & changed,
                                  self.ignition + progress * self._span, np.inf)
             elif s["name"] in ("smoke", "filaments"):
                 frac = np.clip(dist / reach, 0.0, 1.0) ** SMOKE_GROWTH_EXPONENT
@@ -247,16 +401,83 @@ class _StageRecorder:
                 # Fogonazo y centros: aparecen completos de golpe en la ignición.
                 birth = np.where(changed, float(self.ignition), np.inf)
 
-            layers.append((birth.astype(np.float32), s["tensor"], s["mask"], s["heatmap"]))
+            layers.append((s["name"], birth.astype(np.float32),
+                           s["tensor"], s["mask"], s["heatmap"]))
         return layers
 
 
-def _terrain_ramp(num_frames: int, ignition: int) -> np.ndarray:
-    """Intensidad relativa del terreno por frame: sube desde TERRAIN_RAMP_START
-    y satura antes de la ignición."""
-    saturate_at = max(1.0, ignition * TERRAIN_RAMP_SATURATE_AT)
-    t = np.minimum(np.arange(num_frames) / saturate_at, 1.0)
-    return TERRAIN_RAMP_START + (1.0 - TERRAIN_RAMP_START) * t
+def _terrain_drift(num_frames: int, time_rng: np.random.Generator) -> np.ndarray:
+    """Posición de la cámara frame a frame, en píxeles: (num_frames + 1, 2).
+
+    Una fila de más porque el frame 0 también es una diferencia y necesita de
+    dónde venir; la primera es el origen.
+
+    El paso se sortea una vez por secuencia (los videos reales tienen
+    movimientos de cámara distintos), el rumbo vira frame a frame y rebota
+    contra las paredes de la caja — ver las tres constantes TERRAIN_DRIFT_*.
+
+    El rebote se aplica sobre la posición ya avanzada, doblándola contra la
+    pared: el camino recorrido en ese frame sigue midiendo `step`, que es lo que
+    mantiene las estadísticas del residuo donde se las calibró."""
+    step = time_rng.uniform(*TERRAIN_DRIFT_RANGE)
+    heading = time_rng.uniform(0.0, 2 * np.pi)
+    turns = time_rng.normal(0.0, TERRAIN_DRIFT_TURN_STD, size=num_frames)
+    limit = TERRAIN_DRIFT_MAX_OFFSET
+
+    offsets = np.zeros((num_frames + 1, 2), dtype=np.float32)
+    for i, turn in enumerate(turns, start=1):
+        heading += turn
+        y = offsets[i - 1][0] + step * np.sin(heading)
+        x = offsets[i - 1][1] + step * np.cos(heading)
+        if abs(y) > limit:
+            y = np.copysign(2 * limit, y) - y
+            heading = -heading
+        if abs(x) > limit:
+            x = np.copysign(2 * limit, x) - x
+            heading = np.pi - heading
+        offsets[i] = (y, x)
+    return offsets
+
+
+def _shift(field: np.ndarray, dy: float, dx: float) -> np.ndarray:
+    """Traslada un campo (dy, dx) píxeles con interpolación bilineal.
+
+    Los bordes se replican: un wraparound metería un salto artificial de un lado
+    al otro del cuadro que en el residuo se vería como una franja encendida.
+
+    Los índices se arman por eje y se combinan con np.ix_ porque una traslación
+    es separable — no hace falta una grilla completa de coordenadas."""
+    h, w = field.shape
+    yy = np.clip(np.arange(h, dtype=np.float32) - dy, 0, h - 1)
+    xx = np.clip(np.arange(w, dtype=np.float32) - dx, 0, w - 1)
+    y0 = np.floor(yy).astype(np.int32)
+    x0 = np.floor(xx).astype(np.int32)
+    y1 = np.minimum(y0 + 1, h - 1)
+    x1 = np.minimum(x0 + 1, w - 1)
+    fy = (yy - y0)[:, None]
+    fx = (xx - x0)[None, :]
+    return (field[np.ix_(y0, x0)] * (1 - fy) * (1 - fx) +
+            field[np.ix_(y1, x0)] * fy * (1 - fx) +
+            field[np.ix_(y0, x1)] * (1 - fy) * fx +
+            field[np.ix_(y1, x1)] * fy * fx)
+
+
+def _terrain_residuals(terrain: np.ndarray, offsets: np.ndarray):
+    """Terreno de cada frame: |terreno(t) - terreno(t-1)|, o sea lo que cambió al
+    moverse la cámara — lo mismo que deja un absdiff entre dos frames de video.
+
+    Es un generador y no una lista porque el terreno de un frame pesa lo mismo
+    que el cuadro entero: guardar los 90 serían ~140 MB por worker, y
+    generate_sequence_dataset.py corre una docena en paralelo.
+
+    Se redondea en vez de truncar: los canales reales son un absdiff de enteros,
+    y truncar la interpolación bilineal bajaría la media medio nivel de gris —
+    sobre una media objetivo de 0.8-1.4 eso no es un detalle."""
+    previous = _shift(terrain, *offsets[0])
+    for offset in offsets[1:]:
+        current = _shift(terrain, *offset)
+        yield np.rint(np.abs(current - previous)).astype(np.uint8)
+        previous = current
 
 
 def _sample_progress_schedule(time_rng: np.random.Generator) -> list[tuple[float, float]]:
@@ -324,26 +545,48 @@ def generate_explosion_sequence(
         progress_schedule=_sample_progress_schedule(time_rng),
     )
 
-    ramp = _terrain_ramp(num_frames, ignition)
+    # La deriva se sortea siempre, aunque el modo acumulado no la use: así los
+    # dos modos consumen `time_rng` igual y la misma semilla da la misma
+    # estructura temporal en ambos.
+    drift = _terrain_drift(num_frames, time_rng)
     terrain = recorder.terrain.astype(np.float32)
     layers = recorder.finalize()
 
-    def compose(t: int, only_window: bool):
+    def compose(t: int, only_window: bool, terrain_frame: np.ndarray):
         """Arma un frame aplicando las capas fechadas sobre el terreno.
 
         `only_window` elige cómo se lee el mismo fechado: prefijo (todo lo nacido
         hasta t) o banda (solo lo nacido en este tramo). El dato de cuándo nace
         cada píxel ya lo dejó finalize().
+
+        `terrain_frame` es el terreno de ESE frame, que depende del modo y por
+        eso viene de afuera: el residuo de la deriva en modo ventana, el terreno
+        entero en modo acumulado (ver la llamada).
         """
-        tensor = (terrain * ramp[t]).astype(np.uint8)
+        tensor = terrain_frame.astype(np.uint8)
         mask = np.zeros((height, width), dtype=np.uint8)
         heatmap = np.zeros((height, width), dtype=np.uint8)
 
-        for birth, layer_tensor, layer_mask, layer_heatmap in layers:
-            visible = ((birth > t - 1) & (birth <= t)) if only_window else (birth <= t)
-            tensor[visible] = layer_tensor[visible]
-            mask[visible] = layer_mask[visible]
-            heatmap[visible] = layer_heatmap[visible]
+        for name, birth, layer_tensor, layer_mask, layer_heatmap in layers:
+            if not only_window:
+                visible = birth <= t
+                tensor[visible] = layer_tensor[visible]
+                mask[visible] = layer_mask[visible]
+                heatmap[visible] = layer_heatmap[visible]
+                continue
+
+            # Humo y filamentos LLEGAN: su tinta se reparte entre los frames
+            # siguientes al nacimiento (ver SMOKE_ARRIVAL_PROFILE). El resto
+            # aparece completo en su frame, que es lo que muestran las
+            # referencias para el trazo de trayectoria y para el fogonazo.
+            perfil = SMOKE_ARRIVAL_PROFILE if name in ("smoke", "filaments") else (1.0,)
+            for k, peso in enumerate(perfil):
+                visible = (birth > t - k - 1) & (birth <= t - k)
+                if not visible.any():
+                    continue
+                tensor[visible] = np.rint(layer_tensor[visible] * peso).astype(np.uint8)
+                mask[visible] = layer_mask[visible]
+                heatmap[visible] = layer_heatmap[visible]
 
         # Mismo saneo que generate_explosion: humo que quedó en negro puro no es
         # humo. Se repite por frame porque el recorte temporal puede dejar en
@@ -351,7 +594,17 @@ def generate_explosion_sequence(
         mask[(tensor == 0) & (mask == 1)] = 0
         return tensor, mask, heatmap
 
-    frames = [compose(t, windowed) for t in range(num_frames)]
+    # En modo ventana el terreno de cada frame es el residuo de la deriva, que es
+    # lo que deja un absdiff. En modo acumulado NO: un acumulador que no se vacía
+    # vuelve a sumar el terreno hasta tenerlo entero, así que ahí entra completo
+    # desde el primer frame — que además es lo que conserva la equivalencia bit a
+    # bit del último frame con generate_explosion.
+    if windowed:
+        frames = [compose(t, True, terrain_frame) for t, terrain_frame
+                  in enumerate(_terrain_residuals(terrain, drift))]
+    else:
+        frames = [compose(t, False, terrain) for t in range(num_frames)]
+
     if not return_final:
         return frames
 
@@ -360,7 +613,7 @@ def generate_explosion_sequence(
     # generate_explosion con el mismo rng, y sirve de target denso para una
     # entrada de N ventanas — que es la única forma de conservar el balance de
     # clases de v20 sin renunciar a la señal temporal en la entrada.
-    return frames, compose(num_frames - 1, False)
+    return frames, compose(num_frames - 1, False, terrain)
 
 
 def _reset_preview_dir(path: str) -> None:
