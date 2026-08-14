@@ -72,6 +72,7 @@ import os
 import sys
 
 import numpy as np
+from PIL import Image
 
 from main import generate_explosion, HEIGHT, WIDTH
 from export import tensor_to_image, mask_to_rgb, contact_sheet
@@ -257,6 +258,41 @@ SMOKE_GROWTH_EXPONENT = 1.0
 # evidencia medida en contra en las referencias (trazo truncado y no atenuado; el
 # fogonazo aparece completo en un solo frame). Ver el docstring del módulo.
 SMOKE_ARRIVAL_PROFILE = (0.21, 0.38, 0.24, 0.09, 0.05, 0.02, 0.01)
+
+# Nota para quien retome esto: se probó dispersar por manchas el momento de
+# nacimiento del humo (un campo Perlin corriendo `frac` hasta ±0.35 del tramo),
+# con la idea de que la pluma no naciera por anillos concéntricos. Medido sobre
+# la composición de un bloque, el efecto fue indistinguible de no hacer nada, así
+# que se sacó. Lo que sí resolvió el problema fue la turbulencia de acá abajo.
+
+# Turbulencia: un píxel de humo ya llegado vuelve a encenderse cada tanto.
+#
+# La nube real no se apaga después de llegar: sigue revolviéndose mientras está
+# viva, y eso es lo que hace que EXISTA en un bloque. Medido sobre la composición
+# MAX de los 9 canales de un bloque, que es la vista que resume lo que ve el
+# modelo:
+#
+#                        media   >25     >50    >100
+#   REAL ESS_F04 (b468)   26.7  32.8%   6.2%   2.8%
+#   REAL Video 7 (b612)   36.5  55.4%  15.4%   3.9%
+#   nuestro, antes         2.5-10  0.4-5%  0.2-0.4%  0.02-0.05%
+#
+# El dato que fija el diseño: nuestra máscara de humo cubre 1-2.6% del cuadro en
+# un bloque, o sea que si la nube que YA tenemos se encendiera entera dentro de
+# los 9 frames daríamos 1-2.6% sobre 100 — justo el rango real. No falta nube,
+# falta que se encienda.
+#
+# Y se enciende a RÁFAGAS, no con un rumor parejo. Que casi todo píxel de nube
+# supere 100 al menos una vez cada 9 frames descarta el rumor débil: la actividad
+# media por canal es baja pero el pico es alto, o sea intermitencia. Por eso
+# _PROB es del orden de 1/9 y la amplitud es alta.
+#
+# El campo de ráfagas es POR MANCHAS y se sortea de nuevo en cada frame: si fuera
+# fijo estaría igual en los 9 canales y volveríamos al problema del terreno
+# estático, donde lo que no cambia se aprende como fondo.
+SMOKE_TURBULENCE_PROB = 0.14
+SMOKE_TURBULENCE_AMPLITUDE = (0.35, 1.0)
+SMOKE_TURBULENCE_CELL = 16
 
 # Ventana en la que puede lanzarse una trayectoria, como fracción del tramo
 # post-ignición. El piso no es 0 porque en las referencias las trayectorias
@@ -462,6 +498,18 @@ def _shift(field: np.ndarray, dy: float, dx: float) -> np.ndarray:
             field[np.ix_(y1, x1)] * fy * fx)
 
 
+def _burst_field(height: int, width: int, time_rng: np.random.Generator) -> np.ndarray:
+    """Campo [0, 1] de ráfagas de turbulencia para UN frame, por manchas.
+
+    Se arma sorteando una grilla chica y estirándola: es mucho más barato que un
+    Perlin y alcanza, porque acá solo hace falta que las manchas tengan un tamaño
+    parecido al de los remolinos y que cambien de frame a frame. Se sortea una
+    por frame a propósito — ver SMOKE_TURBULENCE_PROB."""
+    cell = SMOKE_TURBULENCE_CELL
+    small = time_rng.random((max(2, height // cell), max(2, width // cell))).astype(np.float32)
+    return np.asarray(Image.fromarray(small).resize((width, height), Image.BILINEAR))
+
+
 def _terrain_residuals(terrain: np.ndarray, offsets: np.ndarray):
     """Terreno de cada frame: |terreno(t) - terreno(t-1)|, o sea lo que cambió al
     moverse la cámara — lo mismo que deja un absdiff entre dos frames de video.
@@ -580,6 +628,24 @@ def generate_explosion_sequence(
             # aparece completo en su frame, que es lo que muestran las
             # referencias para el trazo de trayectoria y para el fogonazo.
             perfil = SMOKE_ARRIVAL_PROFILE if name in ("smoke", "filaments") else (1.0,)
+
+            # Turbulencia: lo que ya llegó vuelve a encenderse a ráfagas. Va
+            # ANTES del bucle de llegada para que, si un píxel está llegando y
+            # además le toca ráfaga, gane la llegada — que es el evento nuevo.
+            if name in ("smoke", "filaments"):
+                llegado = np.isfinite(birth) & (birth <= t - len(perfil))
+                if llegado.any():
+                    rafaga = _burst_field(height, width, time_rng)
+                    sel = llegado & (rafaga > 1.0 - SMOKE_TURBULENCE_PROB)
+                    lo, hi = SMOKE_TURBULENCE_AMPLITUDE
+                    # la amplitud sigue al campo: el centro de una ráfaga pega
+                    # más fuerte que su borde
+                    fuerza = lo + (hi - lo) * (rafaga[sel] - (1.0 - SMOKE_TURBULENCE_PROB)) \
+                        / SMOKE_TURBULENCE_PROB
+                    tensor[sel] = np.rint(layer_tensor[sel] * fuerza).astype(np.uint8)
+                    mask[sel] = layer_mask[sel]
+                    heatmap[sel] = layer_heatmap[sel]
+
             for k, peso in enumerate(perfil):
                 visible = (birth > t - k - 1) & (birth <= t - k)
                 if not visible.any():
