@@ -68,38 +68,6 @@ _SMOKE_LOBE_COUNT = (6, 14)
 _SMOKE_LOBE_RADIUS = (0.35, 0.95)
 _SMOKE_LOBE_OFFSET = (0.0, 0.55)
 
-# Dispersión de la pluma, sorteada UNA vez por explosión: multiplica cuánto se
-# alejan los lóbulos del eje.
-#
-# No es un parámetro de gusto, es una variable del dominio que teníamos fija.
-# Medida la extensión de la nube (desvío de las coordenadas encendidas, en
-# fracción del lado del cuadro) sobre el bloque con evento de las dos
-# referencias:
-#
-#   REAL ESS_F04   0.122 / 0.112     compacta
-#   REAL Video 7   0.220 / 0.236     el doble de desparramada
-#
-# Son dos explosiones distintas, no ruido de medición. Con la dispersión fija
-# reproducíamos solo la primera —nuestras cuatro semillas daban 0.09-0.15— y en
-# producción el modelo va a ver las dos. Es la tercera vez que las referencias se
-# contradicen entre sí (ya pasó con la forma y con el área): cuando eso ocurre lo
-# que corresponde es sortear, no promediar.
-# CUIDADO: este parámetro NO controla la extensión de la nube, aunque para eso se
-# agregó. Medido sobre 12 semillas:
-#
-#   dispersión (0.6, 2.2)   extensión y 0.093-0.185
-#   dispersión (0.6, 3.5)   extensión y 0.094-0.157   <- se ANGOSTA
-#   real                                0.112-0.236
-#
-# Empujar los lóbulos lejos del eje los deja más tenues, así que caen por debajo
-# del umbral con el que se mide la extensión y dejan de contar. Sube el techo
-# geométrico y baja el de brillo. **El lever de la dispersión sigue sin
-# encontrarse** — no volver a subir este número esperando ensanchar la nube.
-#
-# Se queda en 3.5 igual porque midió mejor en la cola (>100 del canal 0.59% contra
-# 0.42%, con el real en 0.50-0.66%), pero ese es un efecto que no tengo explicado.
-_SMOKE_DISPERSION_RANGE = (0.6, 3.5)
-
 # Reborde de cada lóbulo. Es lo que separa una coliflor de una mancha.
 #
 # Los lóbulos solos no alcanzaron: sin reborde, más lóbulos dan una mancha más
@@ -221,13 +189,10 @@ def draw_smoke(
     # eso es lo que dibuja las cabezas de adentro de la coliflor.
     n_lobes = int(rng.integers(*_SMOKE_LOBE_COUNT, endpoint=True))
     anchors = rng.integers(0, len(centers), size=n_lobes)
-    # Una sola por explosión, no una por lóbulo: lo que varía entre explosiones
-    # es cuán desparramada sale la pluma entera, no cada bulto por su cuenta.
-    dispersion = rng.uniform(*_SMOKE_DISPERSION_RANGE)
     for anchor, frac, ang, push in zip(anchors,
                                        rng.uniform(*_SMOKE_LOBE_RADIUS, size=n_lobes),
                                        rng.uniform(0, 2 * np.pi, size=n_lobes),
-                                       rng.uniform(*_SMOKE_LOBE_OFFSET, size=n_lobes) * dispersion):
+                                       rng.uniform(*_SMOKE_LOBE_OFFSET, size=n_lobes)):
         ly = all_cy[anchor] + np.sin(ang) * push * smoke_radius
         lx = all_cx[anchor] + np.cos(ang) * push * smoke_radius
         d_lobe = np.hypot(ys - ly, xs - lx) / (frac * smoke_radius)
