@@ -98,7 +98,7 @@ PREVIEW_MASK_DIR = "sequence_mask"
 # Con 9 frames el target del único bloque queda en 9.61%. Si hace falta densidad
 # por bloque, la palanca no es este número sino la cantidad de trayectorias por
 # explosión en main.py.
-NUM_FRAMES_RANGE = (90, 90)
+NUM_FRAMES_RANGE = (27, 27)
 
 # Fracción de la secuencia anterior a la ignición.
 #
@@ -115,6 +115,24 @@ NUM_FRAMES_RANGE = (90, 90)
 # Siguen haciendo falta: son la señal de "acá no hay nada" y atacan de frente el
 # modo de falla de v18, terreno predicho como humo (ver el repo de segmentación).
 PRE_IGNITION_FRACTION_RANGE = (0.15, 0.30)
+
+# ADVERTENCIA sobre las mediciones citadas más abajo: hay DOS varas reales y no
+# son intercambiables. Confundirlas costó una sesión entera de calibrar para el
+# lado equivocado.
+#
+#   canal real PROMEDIO      45 canales del medio de cada video, la mayoría SIN
+#                            explosión. media 1.08, >50 0.0071%, >100 0.0002%.
+#   canal real CON EVENTO    los 9 canales del bloque donde sí hay explosión.
+#                            media 9-14, >50 2.1-2.8%, >100 0.5-0.66%.
+#
+# Son 300-400x de diferencia en la cola. Nuestras secuencias sintéticas SIEMPRE
+# tienen explosión, así que la vara que corresponde es la SEGUNDA. Medido contra
+# la primera, el humo parecía tener "100x más píxeles brillantes que el real";
+# medido contra la segunda, estaba 20-30x demasiado tenue.
+#
+# La primera sigue sirviendo para el TERRENO, que está en todos los canales con o
+# sin evento. Por eso la deriva de acá abajo se calibró contra ella y sigue
+# valiendo. Para cualquier cosa del humo o de las trayectorias, usar la segunda.
 
 # Deriva del terreno por frame, en píxeles: el ego-motion de la cámara.
 #
@@ -290,8 +308,22 @@ SMOKE_ARRIVAL_PROFILE = (0.21, 0.38, 0.24, 0.09, 0.05, 0.02, 0.01)
 # El campo de ráfagas es POR MANCHAS y se sortea de nuevo en cada frame: si fuera
 # fijo estaría igual en los 9 canales y volveríamos al problema del terreno
 # estático, donde lo que no cambia se aprende como fondo.
-SMOKE_TURBULENCE_PROB = 0.14
-SMOKE_TURBULENCE_AMPLITUDE = (0.35, 1.0)
+# Barrido del 2026-08-14, a radio de pluma x2, contra el bloque real:
+#
+#   prob  amplitud      >25    >50   >100
+#   0.14  (0.35, 1.0)  6.20   1.17   0.17
+#   0.30  (0.60, 1.0)  7.99   3.18   0.60
+#   0.50  (0.80, 1.0) 11.26   5.89   1.95
+#   0.80  (0.80, 1.0) 11.72   6.13   2.12
+#   REAL ESS_F04      32.00   6.60   3.00
+#   REAL Video 7      62.00  17.60   3.60
+#
+# Se eligió 0.50: con 0.80 la ganancia ya es marginal y encender casi todo en
+# todos los frames volvería los 9 canales parecidos entre sí, que es el defecto
+# que este archivo viene arreglando. El >25 queda corto pero es el umbral menos
+# confiable — a ese nivel el terreno contamina la cuenta en los dos lados.
+SMOKE_TURBULENCE_PROB = 0.50
+SMOKE_TURBULENCE_AMPLITUDE = (0.80, 1.0)
 SMOKE_TURBULENCE_CELL = 16
 
 # Ventana en la que puede lanzarse una trayectoria, como fracción del tramo

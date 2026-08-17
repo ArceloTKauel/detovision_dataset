@@ -45,6 +45,36 @@ HEIGHT = 512
 WIDTH = 768
 DRAW_LANDSLIDES = False
 
+# Tamaño de la pluma, como fracción del lado corto del lienzo y luego de esa
+# base. Estaban en línea dentro de generate_explosion; se sacaron a constantes
+# para poder barrerlos contra las referencias.
+#
+# Medido el 2026-08-14 sobre la composición de un bloque de 9, con el real
+# reducido a la misma densidad de píxeles que el sintético, y contra los videos
+# que efectivamente se van a analizar en producción:
+#
+#                        >25 del cuadro   >50      >100
+#   REAL ESS_F04 (b468)       32%          6.6%     3.0%
+#   REAL Video 7  (b612)      62%         17.6%     3.6%
+#   nuestro, con (0.15, 0.30)  1.3-10%     0.7-1.3% 0.1-0.2%
+#
+# O sea entre 5 y 20 veces menos nube. Como el área va con el cuadrado del radio,
+# cerrar eso pide multiplicar el radio por algo entre 2 y 4.
+# Barrido del multiplicador del radio, sobre la ocupación del bloque:
+#
+#   radio   máscara   >25    >50   >100
+#   x1        4.1%   4.00   0.82   0.15
+#   x2       12.5%   6.20   1.17   0.17
+#   x3       23.3%   6.76   1.38   0.26
+#
+# Triplicar el radio multiplica la MÁSCARA por 5.7 y la tinta encendida solo por
+# 1.7: agranda superficie etiquetada como humo que casi no tiene humo visible, y
+# eso empeora el desajuste entre etiqueta y evidencia. Por eso se queda en x2 y
+# el resto del camino lo hace la turbulencia (ver SMOKE_TURBULENCE_PROB en
+# sequence.py), que enciende la nube que ya existe en vez de agrandarla.
+SMOKE_BASE_LENGTH_RANGE = (0.25, 0.40)
+SMOKE_RADIUS_RANGE = (0.30, 0.60)
+
 
 def generate_explosion(
     height: int,
@@ -116,9 +146,9 @@ def generate_explosion(
     # en un solo frame y fija el máximo de brillo de toda la secuencia.
     notify("blast", blast_line=blast_line, origin=origin)
 
-    # Humo: radio proporcional al tamaño del lienzo
-    base_length = min(height, width) * rng.uniform(0.25, 0.40)
-    smoke_radius = base_length * rng.uniform(0.15, 0.3)
+    # Humo: radio proporcional al tamaño del lienzo (ver SMOKE_RADIUS_RANGE)
+    base_length = min(height, width) * rng.uniform(*SMOKE_BASE_LENGTH_RANGE)
+    smoke_radius = base_length * rng.uniform(*SMOKE_RADIUS_RANGE)
     draw_smoke(tensor, centers, smoke_radius, rng, mask, brightness_scale=brightness_scale)
 
     # Sub-nubes de "humo blanco": reutiliza draw_smoke sobre un centro y radio
