@@ -3,10 +3,9 @@ main.py - Punto de entrada del generador de dataset sintético de explosiones.
 
 Orquesta el pipeline completo de generación en un solo pase: dibuja el terreno,
 crea el lienzo, genera la línea de tiro (la fila de pozos cargados), distribuye
-centros de metralla, dibuja el humo y sus filamentos, traza franjas de derrumbe
-(opcional) y
-trayectorias rectas, parabólicas y de sobrevuelo, y produce simultáneamente dos
-salidas:
+centros de metralla, dibuja el humo y sus filamentos, y traza franjas de derrumbe
+(opcional) y trayectorias rectas, parabólicas y de sobrevuelo. Produce dos
+salidas en un solo pase:
     - Imagen en escala de grises (entrada del dataset): el humo queda en
       gradiente continuo (más intenso cerca del centro de la explosión, más
       tenue hacia el borde). Las trayectorias también tienen su propio brillo,
@@ -41,11 +40,9 @@ from trajectories import draw_trajectories
 from terrain import draw_terrain
 from export import tensor_to_image, mask_to_rgb
 
-HEIGHT = 512
-WIDTH = 768
-# Clase 3 (derrumbe) desactivada: implementada y validada, pero fuera del
-# alcance del modelo por ahora.
-DRAW_LANDSLIDES = False
+HEIGHT = 512                                 # alto del lienzo, en px
+WIDTH = 768                                  # ancho del lienzo, en px
+DRAW_LANDSLIDES = False                      # clase 3 desactivada por ahora
 
 
 def generate_explosion(

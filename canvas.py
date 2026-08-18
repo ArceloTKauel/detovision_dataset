@@ -30,10 +30,10 @@ import numpy as np
 #
 # Antes los centros se repartían dentro de un cuadrilátero, lo que daba un blob
 # redondeado: elongación medida 1.99 contra 3.42 de las referencias.
-BLAST_LINE_LENGTH_RATIO = (0.10, 0.28)   # fracción de min(alto, ancho)
-BLAST_LINE_BOW_RATIO    = (-0.12, 0.12)  # curvatura: los bancos no son rectos
-BLAST_LINE_JITTER_RATIO = 0.05           # dispersión lateral de los pozos
-_BLAST_LINE_SAMPLES     = 48
+BLAST_LINE_LENGTH_RATIO = (0.10, 0.28)       # fracción de min(alto, ancho)
+BLAST_LINE_BOW_RATIO    = (-0.12, 0.12)      # curvatura: los bancos no son rectos
+BLAST_LINE_JITTER_RATIO = 0.05               # dispersión lateral de los pozos
+_BLAST_LINE_SAMPLES     = 48                 # puntos con que se muestrea la polilínea
 
 
 def generate_blast_line(
@@ -101,7 +101,7 @@ def create_canvas(height: int, width: int) -> np.ndarray:
 # que draw_smoke se dibuja encima (después, con np.maximum), el cuadrado
 # quede camuflado dentro de la textura del humo en vez de verse como un
 # parche plano y perfectamente cuadrado.
-_CENTER_BRIGHTNESS_RANGE = (120.0, 200.0)
+_CENTER_BRIGHTNESS_RANGE = (120.0, 200.0)    # brillo del pozo, camuflado bajo el humo
 
 
 def draw_center(

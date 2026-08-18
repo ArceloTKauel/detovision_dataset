@@ -53,13 +53,13 @@ from export import tensor_to_image, mask_to_rgb, contact_sheet
 
 # Realce de los contact sheets. El dominio es oscuro (p50 entre 7 y 10 en las
 # referencias reales) y sin esto las miniaturas se ven negras.
-SHEET_BRIGHTNESS = 3.5
+SHEET_BRIGHTNESS = 3.5                       # realce del contact sheet: el dominio es oscuro
 
 # Carpetas de la vista previa: los frames de una corrida van separados de sus
 # máscaras, en vez de intercalados en la raíz del repo. Cada una lleva adentro
 # su propio contact sheet.
-PREVIEW_DIR = "sequence"
-PREVIEW_MASK_DIR = "sequence_mask"
+PREVIEW_DIR = "sequence"                     # frames de la vista previa
+PREVIEW_MASK_DIR = "sequence_mask"           # sus máscaras
 
 # Largo de la secuencia, fijo y múltiplo de los 9 frames que entran juntos como
 # canales, así ninguna deja frames colgando sin bloque. Fijo y no sorteado porque
@@ -69,7 +69,7 @@ PREVIEW_MASK_DIR = "sequence_mask"
 # en ~0.1% de trayectoria y de humo, y los tres primeros bloques salen casi sin
 # trayectoria. Si hace falta densidad por bloque, la palanca no es este número
 # sino la cantidad de trayectorias por explosión en main.py.
-NUM_FRAMES_RANGE = (90, 90)
+NUM_FRAMES_RANGE = (90, 90)                  # largo de la secuencia, múltiplo de BLOCK_SIZE
 
 # Fracción de la secuencia anterior a la ignición. En las referencias va de 0.29
 # a 0.50; acá va más bajo a propósito, porque con el valor real el 41% de las
@@ -81,7 +81,7 @@ NUM_FRAMES_RANGE = (90, 90)
 # frame pre-explosión, no cuántos vienen por secuencia. Siguen haciendo falta:
 # son la señal de "acá no hay nada" y atacan el modo de falla de v18, terreno
 # predicho como humo.
-PRE_IGNITION_FRACTION_RANGE = (0.15, 0.30)
+PRE_IGNITION_FRACTION_RANGE = (0.15, 0.30)   # fracción de frames antes de la ignición
 
 # ── Deriva de cámara ───────────────────────────────────────────────────────
 # El terreno no nace ni se intensifica: DERIVA. Un canal del dataset representa
@@ -105,7 +105,7 @@ PRE_IGNITION_FRACTION_RANGE = (0.15, 0.30)
 # la etapa "terrain", no llamando a _terrain_blotch_brightness aparte — sobre el
 # campo suelto sin cuantizar los números dan casi el doble. Y hacen falta muchas
 # semillas: TERRAIN_INTENSITY_RANGE varía el brillo 20x entre imágenes.
-TERRAIN_DRIFT_RANGE = (2.0, 3.0)
+TERRAIN_DRIFT_RANGE = (2.0, 3.0)             # deriva de cámara, px por frame
 
 # Viraje del rumbo por frame, en radianes. No es realismo: es lo que diferencia
 # los canales entre sí. El residuo es grande donde el desplazamiento cruza una
@@ -116,7 +116,7 @@ TERRAIN_DRIFT_RANGE = (2.0, 3.0)
 # frame sale casi vacío. No es un defecto: una cámara que se mueve a lo largo de
 # una curva de nivel no deja residuo. Bajar el viraje lo empeora — en vez de un
 # frame flojo cada tanto daría secuencias enteras flojas.
-TERRAIN_DRIFT_TURN_STD = 0.25
+TERRAIN_DRIFT_TURN_STD = 0.25                # viraje del rumbo por frame, en radianes
 
 # Caja dentro de la cual vagabundea la cámara, en píxeles desde el origen; al
 # llegar al borde el rumbo REBOTA. Hace falta acotar porque 90 frames a 1-2 px
@@ -127,7 +127,7 @@ TERRAIN_DRIFT_TURN_STD = 0.25
 # el tirón le come el paso a la cámara hasta frenarla — medido, reversión 0.15 da
 # media 0.21 y p90 0.0 contra 0.57 y 1.0 rebotando. Apretar la caja no cuesta
 # nada: el paso efectivo es 1.37 con caja de 12 px contra 1.40 con caja de 100.
-TERRAIN_DRIFT_MAX_OFFSET = 12.0
+TERRAIN_DRIFT_MAX_OFFSET = 12.0              # caja donde vagabundea la cámara, en px
 
 # Callejón sin salida: la RAMPA del terreno, que crecía durante la fase
 # pre-explosión. Esa medición venía de heatmaps ACUMULADOS, donde el terreno se
@@ -150,8 +150,8 @@ TERRAIN_DRIFT_MAX_OFFSET = 12.0
 # tenía el 15% de su extensión final. Con 2.0 tiene el 45%, y además el radio va
 # como la raíz del tiempo, que es una expansión desacelerada de gas; con 3.0 la
 # pluma aparece casi de golpe y se pierde la fase de crecimiento.
-SMOKE_REACH_PERCENTILE = 98
-SMOKE_GROWTH_EXPONENT = 2.0
+SMOKE_REACH_PERCENTILE = 98                  # percentil que define el alcance de la pluma
+SMOKE_GROWTH_EXPONENT = 2.0                  # velocidad de expansión: >1 rápido al principio
 
 # Cómo se reparte en el tiempo la LLEGADA del humo a un píxel. Un canal es un
 # absdiff, así que muestra cuánto CAMBIÓ el humo en ese frame, y un píxel real no
@@ -165,7 +165,7 @@ SMOKE_GROWTH_EXPONENT = 2.0
 #
 # NO se aplica a trayectorias ni al fogonazo: de esos dos hay evidencia medida en
 # contra (trazo truncado y no atenuado, fogonazo completo en un solo frame).
-SMOKE_ARRIVAL_PROFILE = (0.21, 0.38, 0.24, 0.09, 0.05, 0.02, 0.01)
+SMOKE_ARRIVAL_PROFILE = (0.21, 0.38, 0.24, 0.09, 0.05, 0.02, 0.01)  # reparto de la tinta (suma 1.0)
 
 # Callejón sin salida: dispersar por manchas el momento de nacimiento del humo
 # (un Perlin corriendo `frac` hasta ±0.35 del tramo), para que la pluma no naciera
@@ -184,27 +184,27 @@ SMOKE_ARRIVAL_PROFILE = (0.21, 0.38, 0.24, 0.09, 0.05, 0.02, 0.01)
 #
 # El campo de ráfagas es POR MANCHAS y se resortea en cada frame: fijo estaría
 # igual en los 9 canales y volvería el problema del terreno estático.
-SMOKE_TURBULENCE_PROB = 0.14
-SMOKE_TURBULENCE_AMPLITUDE = (0.35, 1.0)
-SMOKE_TURBULENCE_CELL = 16
+SMOKE_TURBULENCE_PROB = 0.14                 # fracción de nube que se reenciende por frame
+SMOKE_TURBULENCE_AMPLITUDE = (0.35, 1.0)     # con qué fuerza, en fracción de su valor
+SMOKE_TURBULENCE_CELL = 16                   # tamaño de la mancha de ráfaga, en px
 
 # Ventana en la que puede lanzarse una trayectoria, como fracción del tramo
 # post-ignición. El piso no es 0 porque en las referencias las trayectorias
 # aparecen 1-2 imágenes DESPUÉS del humo, nunca junto con el fogonazo.
-TRAJECTORY_LAUNCH_RANGE = (0.10, 0.70)
+TRAJECTORY_LAUNCH_RANGE = (0.10, 0.70)       # ventana de lanzamiento, en fracción del tramo
 
 # Tiempo de vuelo del fragmento, como fracción del tramo post-ignición. Medido
 # siguiendo el mismo arco por frames consecutivos en dos referencias: ~0.43 en las
 # dos, pese a que un arco es un orden de magnitud más largo que el otro. Por eso
 # el rango es estrecho y NO depende del largo del recorrido ni de cuántos frames
 # tenga la secuencia.
-TRAJECTORY_DURATION_RANGE = (0.30, 0.55)
+TRAJECTORY_DURATION_RANGE = (0.30, 0.55)     # tiempo de vuelo, en fracción del tramo
 
 # Cota superior de trayectorias por imagen (main.py sortea 15-30 rectas, 15-30
 # lazos y 1-3 sobrevuelos). Se preparan rangos de sobra porque los números reales
 # los sortea generate_explosion con su propio rng, después de que acá ya haya que
 # tenerlos listos.
-_MAX_TRAJECTORIES = 70
+_MAX_TRAJECTORIES = 70                       # cota superior: main.py sortea menos
 
 
 def _distance_to_blast_line(blast_line: np.ndarray, h: int, w: int) -> np.ndarray:

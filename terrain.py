@@ -41,18 +41,18 @@ from PIL import Image, ImageFilter
 # el 56% de las secuencias tenía alguno. En las siete referencias el terreno llena
 # el cuadro desde el primer frame (p50 entre 7 y 10), así que un frame vacío no es
 # un caso difícil sino una entrada sin información.
-TERRAIN_PROB = 1.0
+TERRAIN_PROB = 1.0                           # probabilidad de que la imagen lleve terreno
 
 # ── Campo de "elevación" (dirección/curvatura del parallax) ────────────────
-TERRAIN_FIELD_OCTAVES    = (1, 2)
-TERRAIN_FIELD_CELL_RANGE = (250.0, 500.0)
-TERRAIN_PERTURB_STRENGTH = (0.01, 0.05)
-TERRAIN_VANISHING_MARGIN = 1.5
+TERRAIN_FIELD_OCTAVES    = (1, 2)            # campo de elevación: octavas del ruido
+TERRAIN_FIELD_CELL_RANGE = (250.0, 500.0)    # tamaño de celda base, en px
+TERRAIN_PERTURB_STRENGTH = (0.01, 0.05)      # cuánto rompe la simetría del campo radial
+TERRAIN_VANISHING_MARGIN = 1.5               # el punto de fuga puede caer fuera del cuadro
 
 # ── Manchón: el campo se usa directo como brillo, modulado en bandas suaves ─
-TERRAIN_BAND_PERIOD   = (0.04, 0.12)
-TERRAIN_BLOTCH_MAX_VAL = (15, 55)
-TERRAIN_BLUR_RADIUS   = (0.3, 0.8)
+TERRAIN_BAND_PERIOD   = (0.04, 0.12)         # período de las bandas, en fracción del campo
+TERRAIN_BLOTCH_MAX_VAL = (15, 55)            # brillo máximo del manchón, antes de intensity
+TERRAIN_BLUR_RADIUS   = (0.3, 0.8)           # suavizado final, en px
 
 # Piso de la banda (fracción del período que queda "apagada"): en vez de un
 # escalar único por imagen, se modula con un campo de baja frecuencia para
@@ -65,18 +65,18 @@ TERRAIN_BLUR_RADIUS   = (0.3, 0.8)
 # ~1.4x más anchas; este rango las deja en 19.5 px. Es el lever correcto para
 # afinar porque no toca el período, o sea que la forma y el espaciado de las
 # ondas quedan igual.
-TERRAIN_BLOTCH_FLOOR_RANGE     = (0.65, 0.96)
-TERRAIN_FLOOR_FIELD_OCTAVES    = (2, 3)
-TERRAIN_FLOOR_FIELD_CELL_RANGE = (150.0, 320.0)
+TERRAIN_BLOTCH_FLOOR_RANGE     = (0.65, 0.96)  # piso de banda: alto = línea fina
+TERRAIN_FLOOR_FIELD_OCTAVES    = (2, 3)      # campo que modula ese piso
+TERRAIN_FLOOR_FIELD_CELL_RANGE = (150.0, 320.0)  # su tamaño de celda, en px
 # Veces que se aplica smoothstep al campo: empuja los valores hacia los
 # extremos (zona fina / zona ancha bien diferenciadas) manteniendo la
 # transición suave entre ambas, en vez de quedarse en grises intermedios.
-TERRAIN_FLOOR_FIELD_CONTRAST_PASSES = 2
+TERRAIN_FLOOR_FIELD_CONTRAST_PASSES = 2      # pasadas de smoothstep: separa fina de ancha
 
 # Grano fibroso de alta frecuencia, multiplicado sobre la banda.
-TERRAIN_GRAIN_OCTAVES    = (3, 5)
-TERRAIN_GRAIN_CELL_RANGE = (4.0, 12.0)
-TERRAIN_GRAIN_CONTRAST   = (0.5, 0.9)
+TERRAIN_GRAIN_OCTAVES    = (3, 5)            # grano fibroso: octavas
+TERRAIN_GRAIN_CELL_RANGE = (4.0, 12.0)       # su tamaño de celda, en px
+TERRAIN_GRAIN_CONTRAST   = (0.5, 0.9)        # cuánto modula la banda
 
 # ── Cortes en las bandas finas ─────────────────────────────────────────────
 # Las líneas finas de las referencias reales son discontinuas, no un trazo
@@ -94,14 +94,14 @@ TERRAIN_GRAIN_CONTRAST   = (0.5, 0.9)
 # como defecto. La apertura morfológica sí mide ancho absoluto: una banda más
 # gruesa que ~2*RADIUS+1 px sobrevive intacta (con sus bordes) y queda
 # protegida, mientras que una fina desaparece en la erosión y es cortable.
-TERRAIN_DASH_STRENGTH    = 0.65
-TERRAIN_DASH_THIN_RADIUS = 3
-TERRAIN_DASH_LIT_LEVEL   = 0.15
-TERRAIN_DASH_OCTAVES     = (2, 3)
-TERRAIN_DASH_CELL_RANGE  = (5.0, 16.0)
+TERRAIN_DASH_STRENGTH    = 0.65              # umbral de corte: más alto, más discontinua
+TERRAIN_DASH_THIN_RADIUS = 3                 # apertura morfológica: qué banda es "fina"
+TERRAIN_DASH_LIT_LEVEL   = 0.15              # desde qué nivel la banda cuenta como encendida
+TERRAIN_DASH_OCTAVES     = (2, 3)            # campo que decide dónde cortar
+TERRAIN_DASH_CELL_RANGE  = (5.0, 16.0)       # su tamaño de celda, en px
 
 # Intensidad global por muestra.
-TERRAIN_INTENSITY_RANGE = (0.05, 1.0)
+TERRAIN_INTENSITY_RANGE = (0.05, 1.0)        # brillo global: varía 20x entre imágenes
 
 
 def _multi_octave_field(h, w, octaves_range, cell_range, rng, resample=Image.BILINEAR):

@@ -37,18 +37,18 @@ from export import tensor_to_image, mask_to_rgb
 # A 44.3 KB por par: 3.000 secuencias son 270.000 pares y ~12 GB. Conviene medir
 # el tiempo por época antes de comprometerse a ese tamaño — 500 secuencias son
 # 45.000 pares y 2 GB, y alcanzan para saber si el formato sirve.
-TOTAL_SEQUENCES = 3_000
-DATASET_DIR = "dataset_sequences"
+TOTAL_SEQUENCES = 3_000                      # explosiones; cada una da varios bloques
+DATASET_DIR = "dataset_sequences"            # carpeta de salida, con inputs/ y targets/
 
 # Frames que entran juntos como canales del tensor. NUM_FRAMES_RANGE en
 # sequence.py es múltiplo de esto a propósito, así que ninguna secuencia deja
 # frames colgando sin bloque.
-BLOCK_SIZE = 9
+BLOCK_SIZE = 9                               # frames apilados como canales
 
 # Desfase entre la semilla de la explosión y la de su estructura temporal. Son
 # dos streams separados (ver generate_explosion_sequence): con el mismo índice
 # en ambos, dos secuencias distintas compartirían el sorteo temporal.
-_TIME_SEED_OFFSET = 10_000_000
+_TIME_SEED_OFFSET = 10_000_000               # separa el stream temporal del de la explosión
 
 
 def _block_union(block):

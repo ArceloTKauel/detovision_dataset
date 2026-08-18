@@ -18,9 +18,9 @@ Funciones:
 import numpy as np
 from PIL import Image, ImageDraw
 
-CONTACT_SHEET_COLUMNS = 4
-CONTACT_SHEET_TILE = (384, 256)
-_LABEL_HEIGHT = 18
+CONTACT_SHEET_COLUMNS = 4                    # columnas de la grilla
+CONTACT_SHEET_TILE = (384, 256)              # tamaño de cada miniatura, en px
+_LABEL_HEIGHT = 18                           # alto de la banda con el número, en px
 
 
 def tensor_to_image(tensor: np.ndarray, path: str) -> None:

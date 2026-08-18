@@ -16,8 +16,8 @@ from tqdm import tqdm
 from main import generate_explosion, HEIGHT, WIDTH
 from export import tensor_to_image, mask_to_rgb
 
-TOTAL_IMAGES = 10_000
-DATASET_DIR = "dataset"
+TOTAL_IMAGES = 10_000                        # pares entrada/máscara a generar
+DATASET_DIR = "dataset"                      # carpeta de salida, con inputs/ y targets/
 
 
 def generate_single(index: int) -> int:

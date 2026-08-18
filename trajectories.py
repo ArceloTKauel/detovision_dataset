@@ -44,10 +44,10 @@ from smoke import measure_smoke_width
 # kernel gaussiano radial, ancho para que el degradado sea gradual y visible
 # (intenso al centro, fino/tenue hacia el borde). Independiente del footprint
 # de la máscara categórica (clasificación), que se mantiene angosto.
-_HEATMAP_KERNEL_SIZE = 3
-_HEATMAP_KERNEL_SIGMA = 1.6
+_HEATMAP_KERNEL_SIZE = 3                     # lado del kernel del gradiente de trayectoria
+_HEATMAP_KERNEL_SIGMA = 1.6                  # su sigma
 
-_MASK_OFFSETS = (-1, 0)  # trayectorias de 2 píxeles de grosor en la máscara categórica
+_MASK_OFFSETS = (-1, 0)                      # trazo de 2 px en la máscara categórica
 
 
 def _make_gradient_kernel(size: int = _HEATMAP_KERNEL_SIZE, sigma: float = _HEATMAP_KERNEL_SIGMA) -> np.ndarray:
@@ -63,7 +63,7 @@ _HEATMAP_KERNEL = _make_gradient_kernel()
 # Clases de mask que tienen prioridad sobre la trayectoria y nunca deben
 # recibir gradiente de heatmap (humo=1, derrumbe=3). Prioridad completa:
 # humo > trayectoria > derrumbe > fondo.
-_HIGHER_PRIORITY_CLASSES = (1, 3)
+_HIGHER_PRIORITY_CLASSES = (1, 3)            # humo y derrumbe: la trayectoria no los pisa
 
 # Brillo del tensor de entrada por píxel de trayectoria: en vez de una curva
 # determinística por distancia, cada punto dibujado sortea su intensidad de
@@ -73,9 +73,9 @@ _HIGHER_PRIORITY_CLASSES = (1, 3)
 # vez por trayectoria (uniforme en _TRAJECTORY_BRIGHTNESS_MEAN_RANGE) para que
 # distintas trayectorias tengan distinto nivel de brillo entre sí. Rango
 # objetivo de la clase trayectoria (medido con pixel_inspector_gui.py): 2 a 100.
-_TRAJECTORY_BRIGHTNESS_RANGE = (2, 100)
-_TRAJECTORY_BRIGHTNESS_MEAN_RANGE = (10.0, 80.0)
-_TRAJECTORY_BRIGHTNESS_STD = 25.0
+_TRAJECTORY_BRIGHTNESS_RANGE = (2, 100)      # recorte del brillo de un píxel de trazo
+_TRAJECTORY_BRIGHTNESS_MEAN_RANGE = (10.0, 80.0)  # media, sorteada una vez por trayectoria
+_TRAJECTORY_BRIGHTNESS_STD = 25.0            # desvío de esa gaussiana
 
 
 def _sample_trajectory_brightness_mean(rng: np.random.Generator) -> float:
@@ -95,8 +95,8 @@ def _trajectory_brightness(rng: np.random.Generator, mean: float) -> int:
 # fragmentos de metralla de distinto grosor. La mayoría son de 1 píxel, con
 # probabilidad baja de 2 y muy baja de 3. Cada ancho define un bloque de
 # offsets cuadrado centrado en el punto dibujado.
-_TRAJECTORY_WIDTH_VALUES = (1, 2, 3)
-_TRAJECTORY_WIDTH_PROBS = (0.85, 0.12, 0.03)
+_TRAJECTORY_WIDTH_VALUES = (1, 2, 3)         # grosor del trazo, en px
+_TRAJECTORY_WIDTH_PROBS = (0.85, 0.12, 0.03)  # casi todas de 1 px
 _WIDTH_OFFSETS = {
     1: (0,),
     2: (-1, 0),
@@ -156,23 +156,23 @@ def _sample_trajectory_width(rng: np.random.Generator) -> int:
 # O sea que el TAMAÑO de la intervención pesa tanto como su coherencia lógica:
 # que la regla sea geométrica y no un sorteo sobre textura idéntica (que era la
 # justificación para reponer los pelos tras v19) no alcanzó por sí solo.
-_SMOKE_OVERRIDE_PROB = 0.5
+_SMOKE_OVERRIDE_PROB = 0.5                   # probabilidad de verse sobre la periferia
 # Cuánto se levanta el pelo por encima del humo local. Calibrado contra el
 # contraste local (píxel menos la mediana de su vecindario 7x7) de la
 # estructura fina DENTRO de la pluma en ESS_F04: p90=+10, p99=+26, max=+118.
 # Con (35, 75) los pelos salían blanco puro sobre la pluma — el 18.3% por
 # encima de 190.
-_SMOKE_OVERRIDE_CONTRAST_RANGE = (15, 45)
+_SMOKE_OVERRIDE_CONTRAST_RANGE = (15, 45)    # cuánto resalta sobre el humo
 # Techo absoluto del pelo sobre la pluma: ninguna de las 7 referencias supera
 # 190 en ningún píxel, así que un pelo que sature a blanco es un rasgo que el
 # modelo no va a ver nunca en producción.
-_SMOKE_OVERRIDE_MAX = 190
+_SMOKE_OVERRIDE_MAX = 190                    # techo de ese realce
 # Sobre la periferia el pelo va de 1 px, no del ancho sorteado para el resto de
 # la trayectoria: en las referencias los pelos que cruzan la pluma son finos, y
 # un trazo de 2-3 px con realce sale como una tira gruesa que no se parece a
 # nada real. También es lo que permite que la máscara y la tinta coincidan
 # píxel a píxel ahí (ver _paint_traj_mask).
-_SMOKE_OVERRIDE_WIDTH = 1
+_SMOKE_OVERRIDE_WIDTH = 1                    # grosor del trazo cuando pasa sobre el humo
 
 
 def _sample_smoke_override(rng: np.random.Generator) -> tuple[bool, int]:
@@ -358,7 +358,7 @@ def _paint_traj_mask(mask: np.ndarray, py: int, px: int, h: int, w: int,
 # recorrido. 1 (bloque 3x3) cubre exactamente todo lo que un punto puede tocar:
 # el ancho máximo del trazo (_WIDTH_OFFSETS llega a ±1), el kernel 3x3 del
 # heatmap y los offsets de la máscara (_MASK_OFFSETS = -1, 0).
-_PROGRESS_RADIUS = 1
+_PROGRESS_RADIUS = 1                         # vecindad que se fecha al anotar el progreso
 
 
 def _progress_window(launch: float, duration: float) -> tuple[float, float]:
@@ -986,13 +986,13 @@ def draw_straight_trajectories(
 # Fracción mínima de trayectorias parabólicas que deben quedar mayormente
 # dentro del lienzo por imagen (está bien que varias se salgan del cuadro,
 # pero no todas) y umbral de "mayormente contenida" para cada una de ellas.
-MIN_CONTAINED_FRACTION = 0.25
-MIN_VISIBLE_FRACTION = 0.5
+MIN_CONTAINED_FRACTION = 0.25                # fracción de parábolas forzadas a verse
+MIN_VISIBLE_FRACTION = 0.5                   # cuánto de su lazo tiene que entrar en el cuadro
 
 # Rango de max_spacing por trayectoria: valores bajos dan un punteado más
 # cercano/denso en todo el lazo; valores altos dan el punteado más disperso
 # de antes. Se sortea por trayectoria para tener variedad entre imágenes.
-PARABOLA_MAX_SPACING_RANGE = (8, 25)
+PARABOLA_MAX_SPACING_RANGE = (8, 25)         # separación máxima entre puntos del trazo, en px
 
 
 def _schedule_at(progress_schedule: list[tuple[float, float]] | None,

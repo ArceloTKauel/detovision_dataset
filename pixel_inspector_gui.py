@@ -48,7 +48,7 @@ ZOOM_STEP = 1.25
 HOVER_KERNEL = 11
 PREVIEW_CANVAS_SIZE = 220
 PREVIEW_MAX_CELL_ZOOM = 40
-PREVIEW_VALUE_TEXT_MAX_CELLS = 400  # con más celdas que esto, ya no entran los números
+PREVIEW_VALUE_TEXT_MAX_CELLS = 400           # con más celdas que esto, ya no entran los números
 
 
 class Selection:

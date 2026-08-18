@@ -55,7 +55,7 @@ import numpy as np
 
 from trajectories import bresenham
 
-_MASK_OFFSETS = (-1, 0)  # mismo grosor que las trayectorias (2 píxeles)
+_MASK_OFFSETS = (-1, 0)                      # mismo grosor que las trayectorias (2 píxeles)
 
 
 def _paint_landslide_mask(mask: np.ndarray, py: int, px: int, h: int, w: int) -> None:
@@ -130,11 +130,11 @@ def _draw_dotted(
             pixels_since_draw += 1
 
 
-_WALK_TURN_STD = 0.15      # desviación del giro aleatorio por paso (radianes)
-_WALK_MEAN_REVERSION = 0.25  # atracción de vuelta hacia "angle" (0=sin sesgo, 1=vuelve de golpe)
+_WALK_TURN_STD = 0.15                        # desviación del giro aleatorio por paso (radianes)
+_WALK_MEAN_REVERSION = 0.25                  # vuelta hacia "angle": 0 sin sesgo, 1 de golpe
 
-_ALPHA_MEAN = 0.5   # media de la gaussiana de alfa (recta si <0.5, parábola si >=0.5)
-_ALPHA_STD = 0.25   # desvío de esa gaussiana
+_ALPHA_MEAN = 0.5                            # media de alfa: <0.5 recta, >=0.5 parábola
+_ALPHA_STD = 0.25                            # desvío de esa gaussiana
 
 
 def _parabola_points(
