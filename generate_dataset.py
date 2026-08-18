@@ -1,14 +1,13 @@
-#
-# Generación masiva del dataset sintético.
-#
-# Genera N pares de imágenes (entrada B/W + máscara RGB) usando multiprocessing
-# para aprovechar todos los cores disponibles de la CPU.
-#
-# Estructura de salida:
-#     dataset/
-#         inputs/     → imágenes en escala de grises (entrada del modelo)
-#         targets/    → máscaras RGB (fondo/humo/derrumbe planos, trayectoria
-#                       con gradiente de azul)
+"""
+generate_dataset.py - Generación masiva del dataset de imagen única.
+
+N pares (entrada en escala de grises + máscara RGB) con multiprocessing, uno por
+semilla. Para el dataset temporal ver generate_sequence_dataset.py.
+
+Estructura de salida:
+    dataset/inputs/     imágenes en escala de grises
+    dataset/targets/    máscaras RGB
+"""
 
 import os
 from multiprocessing import Pool
@@ -37,6 +36,7 @@ def generate_single(index: int) -> int:
 
 
 def main():
+    """Genera TOTAL_IMAGES pares en paralelo y reporta el avance."""
     os.makedirs(os.path.join(DATASET_DIR, "inputs"), exist_ok=True)
     os.makedirs(os.path.join(DATASET_DIR, "targets"), exist_ok=True)
 

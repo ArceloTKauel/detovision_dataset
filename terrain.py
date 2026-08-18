@@ -19,14 +19,10 @@ independiente del valor previo del tensor) — el terreno solo "gana" la
 etiqueta de fondo en las zonas que ningún otro elemento cubre, que es
 exactamente lo deseado (es un artefacto, no un objeto real a segmentar).
 
-Prototipo y validación visual original contra las referencias reales en
-detovision_segmentation/scripts/preview_terrain_lines.py y
-detovision_segmentation/utils/dataset.py (familia FAKE_TERRAIN_*, aplicada ahí
-como augmentation "en caliente" en cada época de entrenamiento). Esta versión
-es la misma técnica portada al patrón `rng: np.random.Generator` de este
-repo, para hornearla en la generación base del dataset (fija por imagen, no
-resorteada por época) — ver decisión de proyecto: ambas capas conviven
-(la de acá + la "en caliente" del otro repo, que sigue activa sin cambios).
+Prototipo y validación original en detovision_segmentation
+(scripts/preview_terrain_lines.py y la familia FAKE_TERRAIN_* de utils/dataset.py,
+que sigue activa ahí como augmentation por época). Esta es la misma técnica
+horneada en la generación base, fija por imagen; ambas capas conviven.
 
 Funciones:
     - draw_terrain(tensor, rng, prob): Sortea si esta imagen lleva manchón de
@@ -36,22 +32,15 @@ Funciones:
 import numpy as np
 from PIL import Image, ImageFilter
 
-# Probabilidad de que una imagen del dataset lleve manchón de terreno. Antes era
-# 0.5, igual que FAKE_TERRAIN_PROB en detovision_segmentation/utils/dataset.py,
-# pero acá la decisión queda fija para siempre en esa imagen (no se resortea por
-# época).
+# Probabilidad de que una imagen lleve manchón de terreno; acá la decisión queda
+# fija para esa imagen, a diferencia de FAKE_TERRAIN_PROB en el repo hermano, que
+# se resortea por época.
 #
-# Pasó a 1.0 con el dataset temporal (ver sequence.py). Con 0.5, una explosión
-# sin terreno producía frames pre-ignición sin absolutamente nada: medido sobre
-# un lote de 50 secuencias, el 23% de los frames salía completamente negro y el
-# 56% de las secuencias tenía al menos uno. En una imagen suelta eso pasaba
-# desapercibido porque la explosión estaba igual; en una secuencia son una docena
-# de entradas vacías idénticas.
-#
-# Y no existen en la realidad: en las siete referencias el terreno llena el
-# cuadro desde el primer frame, con p50 entre 7 y 10. Un frame vacío no es un
-# caso difícil, es una entrada sin información que el modelo nunca va a ver en
-# producción.
+# Pasó de 0.5 a 1.0 con el dataset temporal: una explosión sin terreno producía
+# frames pre-ignición sin absolutamente nada — el 23% de los frames salía negro y
+# el 56% de las secuencias tenía alguno. En las siete referencias el terreno llena
+# el cuadro desde el primer frame (p50 entre 7 y 10), así que un frame vacío no es
+# un caso difícil sino una entrada sin información.
 TERRAIN_PROB = 1.0
 
 # ── Campo de "elevación" (dirección/curvatura del parallax) ────────────────

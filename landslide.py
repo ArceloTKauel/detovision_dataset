@@ -97,6 +97,7 @@ def _draw_dotted(
     ey, ex = exclude_origin if exclude_origin is not None else (0.0, 0.0)
 
     def excluded(py: int, px: int) -> bool:
+        """True si el punto cae dentro del radio de exclusión de la explosión."""
         return exclude_origin is not None and (py - ey) ** 2 + (px - ex) ** 2 < exclude_radius ** 2
 
     if mask is not None:

@@ -22,6 +22,7 @@ DEFAULT_OUT = "pixel_histogram.png"
 
 
 def extract_patch(img: np.ndarray, x: int, y: int, kernel: int) -> np.ndarray:
+    """Recorta una ventana cuadrada alrededor de un punto, recortada al lienzo."""
     h, w = img.shape
     half = kernel // 2
     y0, y1 = max(0, y - half), min(h, y + half + 1)
@@ -30,6 +31,7 @@ def extract_patch(img: np.ndarray, x: int, y: int, kernel: int) -> np.ndarray:
 
 
 def main():
+    """Imprime el histograma de valores de un parche, para calibrar rangos de brillo."""
     parser = argparse.ArgumentParser(description="Histograma comparativo de píxeles por clase (kernel NxN alrededor de coordenadas).")
     parser.add_argument("image", help="Ruta de la imagen a analizar")
     parser.add_argument(

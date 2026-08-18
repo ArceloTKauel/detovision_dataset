@@ -24,6 +24,7 @@ _LABEL_HEIGHT = 18
 
 
 def tensor_to_image(tensor: np.ndarray, path: str) -> None:
+    """Guarda un tensor 2D uint8 como PNG en escala de grises."""
     image = Image.fromarray(tensor, mode="L")
     image.save(path)
 

@@ -1,65 +1,39 @@
 """
 sequence.py - Generación temporal del dataset, por retroceso desde la imagen final.
 
-La explosión se dibuja completa UNA sola vez —el mismo pase de siempre, sin tocar
-nada— anotando para cada píxel a partir de qué frame existe. Con ese fechado por
-píxel, un frame se arma eligiendo qué rebanada mostrar, y hay dos lecturas del
-mismo dato:
+La explosión se dibuja completa UNA sola vez, anotando para cada píxel a partir
+de qué frame existe. Con ese fechado, un frame se arma eligiendo qué rebanada
+mostrar, y hay dos lecturas del mismo dato:
 
-    - VENTANA (windowed=True, el modo del dataset): el frame t muestra solo lo
-      que nace en su tramo. Una trayectoria es un guion corto que se desplaza, y
-      lo que se dibujó antes ya no está. Es lo que produce el heatmap de video
-      cuando el acumulador se vacía en cada corte, y es lo que hace que apilar
-      frames tenga información: con el acumulado el frame t contiene entero al
-      t-1, así que comparar dos canales no dice nada nuevo.
+    - VENTANA (windowed=True, el modo del dataset): el frame t muestra lo que
+      nace en su tramo. Es lo que produce el heatmap de video cuando el
+      acumulador se vacía en cada corte, y es lo que hace que apilar frames
+      tenga información — con el acumulado el frame t contiene entero al t-1.
     - ACUMULADO (windowed=False): el frame t es la imagen final menos todo lo que
-      nace después de t. Es la lectura con la que nació este archivo; se conserva
-      para comparar y porque su último frame es bit a bit lo que produce
+      nace después de t. Su último frame es bit a bit lo que produce
       main.generate_explosion con el mismo rng.
 
-En modo ventana ningún frame contiene la explosión entera, así que esa
-equivalencia bit a bit no vale frame a frame — vale para la vista que devuelve
-return_final, y está verificado.
-
-La unión de los frames tampoco reconstruye el acumulado píxel a píxel desde que
-el humo LLEGA repartido (ver SMOKE_ARRIVAL_PROFILE): un píxel de humo aparece en
-varios frames, cada uno con una fracción de su valor, y esas fracciones suman el
-valor original en vez de repetirlo. Para trayectorias y fogonazo, que siguen
-apareciendo completos en un solo frame, la propiedad vale como antes.
-
-La trampa si alguien lo rehace: el "cuándo nace cada píxel" hay que capturarlo
-MIENTRAS se dibuja. Deducirlo después desde la imagen final y su máscara es
-imposible, porque la máscara no distingue una trayectoria de otra ni en qué orden
-se recorrió.
+TRAMPA si alguien lo rehace: el "cuándo nace cada píxel" hay que capturarlo
+MIENTRAS se dibuja. Deducirlo después desde la imagen final es imposible, porque
+la máscara no distingue una trayectoria de otra ni en qué orden se recorrió.
 
 Lo que se midió en las referencias y está codificado acá:
 
-    - 29-50% de cada secuencia es PRE-EXPLOSIÓN, puro terreno (V3 6/15, V4 5/13,
-      V7 7/14, V11 4/14). Acá va más bajo a propósito: ver
-      PRE_IGNITION_FRACTION_RANGE, que explica por qué la proporción de frames
-      pre-explosión es una decisión de muestreo nuestra y no una propiedad del
-      dominio.
-    - El terreno no nace ni se intensifica: DERIVA. Está desde el primer frame,
-      pero lo que entra en cada frame es el residuo de moverlo, no el terreno
-      entero — ver TERRAIN_DRIFT_RANGE. Por eso no lleva mapa de nacimiento sino
-      una posición de cámara por frame.
-    - El fogonazo aparece COMPLETO en un solo frame y fija el máximo de brillo de
-      toda la secuencia (V3 197 desde f420, V7 154 desde f480, V11 163 desde f360).
-    - El humo crece en radio de forma monótona, rápido al principio, y además
-      LLEGA a cada píxel repartido en 3-4 frames en vez de aparecer de golpe:
-      medido, el canal más fuerte de un píxel real de evento lleva la mitad de su
-      tinta, no toda. Ver SMOKE_ARRIVAL_PROFILE.
+    - 29-50% de cada secuencia es pre-explosión, puro terreno. Acá va más bajo a
+      propósito: ver PRE_IGNITION_FRACTION_RANGE.
+    - El terreno no nace ni se intensifica, DERIVA. Ver TERRAIN_DRIFT_RANGE.
+    - El fogonazo aparece completo en un solo frame y fija el máximo de brillo de
+      toda la secuencia.
+    - El humo crece rápido al principio y además LLEGA a cada píxel repartido en
+      3-4 frames. Ver SMOKE_GROWTH_EXPONENT y SMOKE_ARRIVAL_PROFILE.
     - Una trayectoria parcial es un trazo TRUNCADO, no atenuado: la punta avanza
-      y lo ya dibujado no cambia de brillo. Los lazos completos solo aparecen en
-      los últimos frames porque el fragmento tarda decenas de frames en
-      recorrerlos.
+      y lo ya dibujado no cambia de brillo.
 
 Funciones:
     - generate_explosion_sequence(height, width, rng, time_rng): lista de
       (tensor, mask, heatmap), una por frame. Con return_final=True devuelve
-      además la vista acumulada completa, que es el target denso de un bloque.
-    - main(): escribe una secuencia de ejemplo en sequence/ y sequence_mask/,
-      con el contact sheet y la vista final dentro de cada carpeta.
+      además la vista acumulada completa.
+    - main(): escribe una secuencia de ejemplo en sequence/ y sequence_mask/.
 
 Uso de la vista previa:
     uv run python sequence.py                 explosión al azar
@@ -87,236 +61,129 @@ SHEET_BRIGHTNESS = 3.5
 PREVIEW_DIR = "sequence"
 PREVIEW_MASK_DIR = "sequence_mask"
 
-# Largo de la secuencia: fijo, y múltiplo de los 9 frames que entran juntos como
-# canales del tensor. 90 son 10 bloques exactos, así que ninguna secuencia deja
-# frames colgando sin bloque. Fijo y no sorteado porque un largo variable daría
-# bloques incompletos al final.
+# Largo de la secuencia, fijo y múltiplo de los 9 frames que entran juntos como
+# canales, así ninguna deja frames colgando sin bloque. Fijo y no sorteado porque
+# un largo variable daría bloques incompletos al final.
 #
-# El precio, medido sobre la semilla 7: repartir la tinta de una explosión entre
-# 90 ventanas deja cada frame en 0.107% de trayectoria y 0.090% de humo, y de los
-# 10 bloques los tres primeros salen casi sin trayectoria (0.00, 0.00 y 0.01%).
-# Con 9 frames el target del único bloque queda en 9.61%. Si hace falta densidad
-# por bloque, la palanca no es este número sino la cantidad de trayectorias por
-# explosión en main.py.
+# El precio: repartir la tinta de una explosión entre 90 ventanas deja cada frame
+# en ~0.1% de trayectoria y de humo, y los tres primeros bloques salen casi sin
+# trayectoria. Si hace falta densidad por bloque, la palanca no es este número
+# sino la cantidad de trayectorias por explosión en main.py.
 NUM_FRAMES_RANGE = (90, 90)
 
-# Fracción de la secuencia anterior a la ignición.
-#
-# En las referencias va de 0.29 a 0.50 (6/15, 5/13, 7/14, 4/14), y ese fue el
-# valor inicial. Se bajó a propósito: con 0.29-0.50, el 41% de las máscaras del
-# dataset salía 100% fondo y el formato temporal diluía la clase humo a un tercio
-# y la trayectoria a un cuarto de su frecuencia en el dataset de imagen única.
+# Fracción de la secuencia anterior a la ignición. En las referencias va de 0.29
+# a 0.50; acá va más bajo a propósito, porque con el valor real el 41% de las
+# máscaras salía 100% fondo.
 #
 # La proporción de frames pre-explosión es una decisión de MUESTREO nuestra, no
 # una propiedad del dominio: las referencias son grabaciones continuas, no un
 # dataset balanceado. Lo que hay que reproducir con fidelidad es cómo se ve un
-# frame pre-explosión, no cuántos vienen por secuencia.
-#
-# Siguen haciendo falta: son la señal de "acá no hay nada" y atacan de frente el
-# modo de falla de v18, terreno predicho como humo (ver el repo de segmentación).
+# frame pre-explosión, no cuántos vienen por secuencia. Siguen haciendo falta:
+# son la señal de "acá no hay nada" y atacan el modo de falla de v18, terreno
+# predicho como humo.
 PRE_IGNITION_FRACTION_RANGE = (0.15, 0.30)
 
-# Deriva del terreno por frame, en píxeles: el ego-motion de la cámara.
+# ── Deriva de cámara ───────────────────────────────────────────────────────
+# El terreno no nace ni se intensifica: DERIVA. Un canal del dataset representa
+# lo mismo que un absdiff entre dos frames reales, así que el terreno no entra
+# completo en cada frame sino su RESIDUO — cuánto cambió al desplazarse la cámara.
 #
-# Un canal del dataset tiene que representar lo mismo que un `absdiff` entre dos
-# frames de video real, que es lo que produce video_diff_heatmap_blocks.py en el
-# repo del modelo. Por eso el terreno NO entra completo en cada frame: entra su
-# RESIDUO, o sea cuánto cambió al desplazarse la cámara. Medido el 2026-08-13
-# sobre el canal ya cuantizado a uint8, que es lo que va al PNG:
+# Importa porque con el terreno completo en los 9 canales, el 95% de un canal
+# sintético estaba presente en TODOS los del bloque contra el 4% del real: la
+# regla más fácil de aprender pasaba a ser "lo que no cambia es fondo", y en las
+# reales el terreno sí cambia. Ese es el modo de falla de v18.
 #
-#   canal real (GAIN=1)         media 0.8-1.4   p50 0-1   p90 2-3   p99 5-7
+# TERRAIN_DRIFT_RANGE, en píxeles por frame, sorteado por secuencia porque los
+# videos reales tienen movimientos distintos. Objetivo del canal real: media
+# 0.8-1.4, p90 2-3, p99 5-7. Con (2.0, 3.0) la media (0.92) y el p90 (3) entran;
+# el p99 no, 14 contra 5-7, porque las curvas de nivel sintéticas son bordes duros
+# y desplazar un borde duro devuelve su amplitud entera. Subir la deriva engorda
+# la cola más rápido de lo que mueve el centro y bajarla saca la media del rango:
+# atacar la cola de verdad pide ablandar el terreno desde terrain.py.
 #
-#   barrido, SOLO terreno (16 semillas, sin componer la explosión):
-#   estático (lo de antes)      media 2.74      p50 0     p90 13    p99 24
-#   deriva (1.0, 2.0)           media 0.40      p50 0     p90 1     p99  5
-#   deriva (2.0, 3.0)           media 0.71      p50 0     p90 2     p99 10
-#   deriva (2.5, 3.5)           media 0.86      p50 0     p90 3     p99 13
-#
-#   secuencia entera (12 semillas, el canal tal como sale al PNG):
-#   deriva (2.0, 3.0)           media 0.92      p50 0     p90 3     p99 14
-#
-# El barrido de terreno solo sirve para ordenar candidatos, no para decidir: la
-# explosión es el 1.4% de la tinta pero llega a 255, así que sube la media un
-# 30% y engorda la cola. Lo que se compara contra el objetivo es la última fila.
-#
-# Se sortea por secuencia porque los videos reales tienen movimientos de cámara
-# distintos (Video 3 da p90 3, ESS_F04 da p90 2).
-#
-# Con (2.0, 3.0) la media y el p90 quedan dentro del objetivo y el p99 no: 14
-# contra 5-7. Nuestra cola superior es más pesada que la real porque las curvas
-# de nivel del terreno sintético son bordes duros, y desplazar un borde duro
-# devuelve su amplitud entera. Subir más la deriva no arregla eso —engorda la
-# cola más rápido de lo que mueve el centro— y bajarla saca la media del rango:
-# (1.0, 2.0), que era la elección inicial, da 0.52 de media medida así. Atacar la
-# cola de verdad pide ablandar el terreno (TERRAIN_BLUR_RADIUS /
-# TERRAIN_BLOTCH_MAX_VAL en terrain.py), que está calibrado contra el ancho de
-# línea de las máscaras reales y no se toca desde acá.
-#
-# Cuidado al re-medir: el terreno hay que sacarlo del pipeline (observer sobre la
-# etapa "terrain"), no llamando a _terrain_blotch_brightness aparte. Medido sobre
-# el campo suelto sin cuantizar, (1.0, 2.0) da media 0.69 en vez de 0.40 — o sea
-# que parecía estar en el objetivo cuando no lo estaba. Y con pocas semillas no
-# sirve: TERRAIN_INTENSITY_RANGE es (0.05, 1.0), o sea que el brillo del terreno
-# varía 20x entre imágenes y con 4-6 muestras la media la decide el sorteo.
-#
-# Por qué importaba: con el terreno completo en los 9 canales, el 95% de un canal
-# sintético estaba presente en TODOS los canales del bloque, contra el 4% del
-# real. La regla más fácil de aprender pasaba a ser "lo que no cambia es fondo",
-# y en las reales el terreno sí cambia entre frames — o sea que esa regla marca
-# el terreno real como evento, que es el modo de falla de v18.
+# TRAMPA al re-medir: hay que sacar el terreno del pipeline con un observer sobre
+# la etapa "terrain", no llamando a _terrain_blotch_brightness aparte — sobre el
+# campo suelto sin cuantizar los números dan casi el doble. Y hacen falta muchas
+# semillas: TERRAIN_INTENSITY_RANGE varía el brillo 20x entre imágenes.
 TERRAIN_DRIFT_RANGE = (2.0, 3.0)
 
-# Cuánto vira el rumbo de la cámara por frame, en radianes.
-#
-# No es un detalle de realismo, es lo que hace que los canales se diferencien:
-# el residuo es grande donde el desplazamiento cruza una curva de nivel y casi
-# nulo donde corre paralelo a ella. Con rumbo FIJO se encienden siempre las
-# mismas curvas y los 9 canales quedan casi iguales, que es justo el defecto que
-# este cambio viene a corregir. Con el rumbo virando, cada frame ilumina otras.
+# Viraje del rumbo por frame, en radianes. No es realismo: es lo que diferencia
+# los canales entre sí. El residuo es grande donde el desplazamiento cruza una
+# curva de nivel y casi nulo donde corre paralelo, así que con rumbo FIJO se
+# encienden siempre las mismas y los 9 canales quedan casi iguales.
 #
 # El precio es que de vez en cuando el rumbo queda paralelo a las curvas y ese
-# frame sale casi vacío: en la semilla 7 el frame 5 da media 0.129 contra 1.012
-# de mediana, con el paso INTACTO (2.07, igual que todos). O sea que no es un
-# defecto del rebote —eso también pasa, el frame 44 de la misma semilla queda
-# flojo con paso 0.58— sino la respuesta correcta a un terreno de bandas
-# paralelas: una cámara que se mueve a lo largo de una curva de nivel no deja
-# residuo. Un rumbo casi fijo no lo arregla, lo empeora: en vez de un frame flojo
-# cada tanto daría secuencias enteras flojas, las que salgan sorteadas paralelas.
+# frame sale casi vacío. No es un defecto: una cámara que se mueve a lo largo de
+# una curva de nivel no deja residuo. Bajar el viraje lo empeora — en vez de un
+# frame flojo cada tanto daría secuencias enteras flojas.
 TERRAIN_DRIFT_TURN_STD = 0.25
 
-# Caja dentro de la cual vagabundea la cámara, en píxeles desde el origen. Al
-# llegar al borde el rumbo REBOTA.
+# Caja dentro de la cual vagabundea la cámara, en píxeles desde el origen; al
+# llegar al borde el rumbo REBOTA. Hace falta acotar porque 90 frames a 1-2 px
+# son más de 100 px sobre un cuadro de 512, y como los bordes se replican esa
+# franja queda con residuo cero y crece.
 #
-# Hace falta acotar porque si no la cámara se va: 90 frames a 1-2 px en un rumbo
-# más o menos sostenido son más de 100 px de corrimiento sobre un cuadro de 512,
-# y como los bordes se replican (un wraparound metería una costura), esa franja
-# replicada queda con residuo cero y crece frame a frame.
-#
-# Se acota rebotando y no tirando de la posición hacia el origen —que fue el
-# primer intento, un Ornstein-Uhlenbeck como el de landslide.py— porque ese tirón
-# le come el paso a la cámara: en el punto de equilibrio la reversión cancela
-# exactamente al paso y la cámara se FRENA. Medido a igual deriva (1.0, 2.0), la
-# reversión 0.15 daba media 0.21 y p90 0.0, contra 0.57 y 1.0 rebotando.
-#
-# El rebote sí acorta el paso, pero solo en el frame en que ocurre y poco: el
-# paso efectivo promedio es 1.37 con caja de 12 px contra 1.40 con caja de 100,
-# así que apretar la caja para achicar la franja de borde replicada no cuesta
-# nada medible.
+# Rebote y no reversión al origen (un Ornstein-Uhlenbeck como el de landslide.py):
+# el tirón le come el paso a la cámara hasta frenarla — medido, reversión 0.15 da
+# media 0.21 y p90 0.0 contra 0.57 y 1.0 rebotando. Apretar la caja no cuesta
+# nada: el paso efectivo es 1.37 con caja de 12 px contra 1.40 con caja de 100.
 TERRAIN_DRIFT_MAX_OFFSET = 12.0
 
-# La RAMPA del terreno se eliminó junto con este cambio. Existía porque en las
-# referencias "la cobertura del terreno crece 3-10x durante la fase pre-explosión
-# y después se estabiliza", pero esa medición se hizo sobre heatmaps ACUMULADOS,
-# donde el terreno se suma frame a frame. En diferencias no aplica: una cámara
-# que deriva a ritmo parejo produce un residuo constante, no creciente. Mantenerla
-# habría sido arrastrar un artefacto de la representación anterior.
+# Callejón sin salida: la RAMPA del terreno, que crecía durante la fase
+# pre-explosión. Esa medición venía de heatmaps ACUMULADOS, donde el terreno se
+# suma frame a frame. En diferencias no aplica — una cámara que deriva a ritmo
+# parejo produce residuo constante, no creciente.
 
-# Crecimiento de la pluma. Un píxel a distancia r de la línea de tiro nace en
-# (r/alcance)**e del tramo post-ignición.
+# ── Crecimiento de la pluma ────────────────────────────────────────────────
+# Un píxel a distancia r de la línea de tiro nace en (r/alcance)**e del tramo
+# post-ignición.
 #
-# El alcance NO es la distancia máxima sino un percentil alto: la masa del humo
-# está mucho más adentro que su píxel más lejano (medido en la semilla 3: p90=35
-# contra un máximo de 69.6), así que normalizar por el máximo hacía nacer el 90%
-# de la pluma en el primer 36% del tramo y después no pasaba nada más.
+# El ALCANCE es un percentil alto y no la distancia máxima: la masa del humo está
+# mucho más adentro que su píxel más lejano (semilla 3: p90 35 contra un máximo de
+# 69.6), y normalizar por el máximo hacía nacer el 90% de la pluma en el primer
+# 36% del tramo. Humo y filamentos comparten alcance para que el núcleo cierre a
+# media secuencia mientras los filamentos siguen alargándose.
 #
-# Humo y filamentos comparten el alcance a propósito: los filamentos llegan
-# mucho más lejos, y con escalas independientes el núcleo tardaba tanto en
-# completarse como la periferia. Con escala común el núcleo cierra a media
-# secuencia y los filamentos siguen alargándose hasta el final, que es lo que se
-# ve en las referencias.
-#
-# EXPONENTE, subido de 1.0 a 2.0 el 2026-08-17. Con 1.0 el crecimiento es LINEAL
-# —un píxel al 50% del alcance nace justo a mitad del tramo— y eso contradecía lo
-# que dice el docstring de este módulo desde el principio: que la pluma crece
-# "rápido al principio". Medida la extensión acumulada por frame, salía una recta:
-#
-#   0  2  5  8 12 16 20 25 30 35 40 46 51 57 63 69 75 80 85 89 93 95 97 100
-#
-# El síntoma es de orden entre eventos: los fragmentos salen volando cuando la
-# pluma todavía es un hilo. Medido sobre 4 semillas, en el frame en que aparece la
-# PRIMERA trayectoria la pluma tenía apenas el 15% de su extensión final, y no
-# llegaba al 90% hasta el frame 22 de 27 — con las trayectorias volando desde el 8.
-#
-#   exp   pluma al salir la 1a trayectoria   pluma al 90%
-#   1.0            15.4%                       f22.0
-#   1.5            30.6%                       f20.0
-#   2.0            44.6%                       f18.2
-#   3.0            65.3%                       f15.5
-#
-# 2.0 y no 3.0 porque además de medir mejor tiene sentido físico: con exponente 2
-# el radio va como la raíz del tiempo, que es una expansión desacelerada de gas.
-# Con 3.0 la pluma aparece casi de golpe y se pierde la fase de crecimiento.
-#
-# OJO, esto NO cambia el ORDEN de aparición y no contradice la evidencia de
-# TRAJECTORY_LAUNCH_RANGE: el humo sigue empezando 4 frames antes que la primera
-# trayectoria, como dicen las referencias. Lo que cambia es la VELOCIDAD con que
-# se expande una vez que empezó.
+# El EXPONENTE controla la velocidad de expansión, no el orden de aparición. Con
+# 1.0 el crecimiento es lineal y los fragmentos salen volando cuando la pluma es
+# un hilo: medido sobre 4 semillas, al aparecer la primera trayectoria la pluma
+# tenía el 15% de su extensión final. Con 2.0 tiene el 45%, y además el radio va
+# como la raíz del tiempo, que es una expansión desacelerada de gas; con 3.0 la
+# pluma aparece casi de golpe y se pierde la fase de crecimiento.
 SMOKE_REACH_PERCENTILE = 98
 SMOKE_GROWTH_EXPONENT = 2.0
 
-# Cómo se reparte en el tiempo la LLEGADA del humo a un píxel.
+# Cómo se reparte en el tiempo la LLEGADA del humo a un píxel. Un canal es un
+# absdiff, así que muestra cuánto CAMBIÓ el humo en ese frame, y un píxel real no
+# pasa de terreno a humo denso de golpe. Medido sobre ESS_F04 y Video 7, aislando
+# la racha de canales consecutivos encendidos de cada píxel de evento: la llegada
+# dura p50 3-4 frames (p90 6) y el canal más fuerte se lleva la mitad de la tinta.
 #
-# Un canal es un `absdiff`, así que lo que muestra no es el humo sino cuánto
-# cambió el humo en ese frame. Un píxel real no pasa de terreno a humo denso de
-# golpe: se densifica en varios frames y cada uno lleva su parte. Medido el
-# 2026-08-13 sobre ESS_F04 y Video 7, aislando la racha de canales consecutivos
-# encendidos de cada píxel de evento (max >= 40):
+# El perfil suma 1.0: reparte la tinta del píxel, no la crea. Por eso no hubo que
+# tocar el brillo del humo, que ya medía bien (94 de mediana contra 82-87 reales);
+# el defecto era entregarla toda junta.
 #
-#                        ESS_F04      Video 7
-#   largo de la llegada  p50 4        p50 3      (p90 6 en los dos)
-#   tinta total          p50 82       p50 87
-#   pico dentro de ella  p50 44       p50 44
-#   pico/suma            0.51         0.50
-#   forma media          .22 .40 .21 .09 .05 .02 .01
-#                        .21 .36 .27 .10 .04 .02 .01
-#
-# El perfil es el promedio de esas dos formas, y suma 1.0: reparte la tinta del
-# píxel, no la crea ni la destruye. Por eso NO hubo que tocar el brillo del humo.
-# Nuestro píxel de humo vale 94 de mediana contra los 82-87 reales, o sea que la
-# tinta ya estaba bien; el defecto era entregarla toda junta. Repartida, el frame
-# más fuerte se lleva 0.38 * 94 = 36 contra los 44 reales.
-#
-# Eso además esquiva la tensión con el solape de brillo terreno/humo (el modo de
-# falla de v18): no hace falta bajar el humo hacia el rango del terreno por
-# decreto. Y coincide con lo que muestran las referencias, donde terreno y evento
-# conviven en el mismo rango bajo — ahí la separación no es por nivel.
-#
-# NO se aplica a trayectorias ni al fogonazo, a propósito: de esos dos hay
-# evidencia medida en contra en las referencias (trazo truncado y no atenuado; el
-# fogonazo aparece completo en un solo frame). Ver el docstring del módulo.
+# NO se aplica a trayectorias ni al fogonazo: de esos dos hay evidencia medida en
+# contra (trazo truncado y no atenuado, fogonazo completo en un solo frame).
 SMOKE_ARRIVAL_PROFILE = (0.21, 0.38, 0.24, 0.09, 0.05, 0.02, 0.01)
 
-# Nota para quien retome esto: se probó dispersar por manchas el momento de
-# nacimiento del humo (un campo Perlin corriendo `frac` hasta ±0.35 del tramo),
-# con la idea de que la pluma no naciera por anillos concéntricos. Medido sobre
-# la composición de un bloque, el efecto fue indistinguible de no hacer nada, así
-# que se sacó. Lo que sí resolvió el problema fue la turbulencia de acá abajo.
+# Callejón sin salida: dispersar por manchas el momento de nacimiento del humo
+# (un Perlin corriendo `frac` hasta ±0.35 del tramo), para que la pluma no naciera
+# por anillos concéntricos. Medido sobre un bloque, indistinguible de no hacer
+# nada. Lo que sí lo resolvió fue la turbulencia.
 
-# Turbulencia: un píxel de humo ya llegado vuelve a encenderse cada tanto.
+# Turbulencia: un píxel de humo ya llegado vuelve a encenderse cada tanto, porque
+# la nube real no se apaga después de llegar — sigue revolviéndose, y eso es lo que
+# hace que EXISTA dentro de un bloque.
 #
-# La nube real no se apaga después de llegar: sigue revolviéndose mientras está
-# viva, y eso es lo que hace que EXISTA en un bloque. Medido sobre la composición
-# MAX de los 9 canales de un bloque, que es la vista que resume lo que ve el
-# modelo:
+# El dato que fija el diseño: nuestra máscara de humo cubre 1-2.6% del cuadro en un
+# bloque, y el real enciende 32-55% de sus píxeles por encima de 25. No falta nube,
+# falta que se encienda. Y se enciende a RÁFAGAS y no con un rumor parejo: la
+# actividad media por canal es baja pero el pico es alto, o sea intermitencia, por
+# eso _PROB es del orden de 1/9 y la amplitud alta.
 #
-#                        media   >25     >50    >100
-#   REAL ESS_F04 (b468)   26.7  32.8%   6.2%   2.8%
-#   REAL Video 7 (b612)   36.5  55.4%  15.4%   3.9%
-#   nuestro, antes         2.5-10  0.4-5%  0.2-0.4%  0.02-0.05%
-#
-# El dato que fija el diseño: nuestra máscara de humo cubre 1-2.6% del cuadro en
-# un bloque, o sea que si la nube que YA tenemos se encendiera entera dentro de
-# los 9 frames daríamos 1-2.6% sobre 100 — justo el rango real. No falta nube,
-# falta que se encienda.
-#
-# Y se enciende a RÁFAGAS, no con un rumor parejo. Que casi todo píxel de nube
-# supere 100 al menos una vez cada 9 frames descarta el rumor débil: la actividad
-# media por canal es baja pero el pico es alto, o sea intermitencia. Por eso
-# _PROB es del orden de 1/9 y la amplitud es alta.
-#
-# El campo de ráfagas es POR MANCHAS y se sortea de nuevo en cada frame: si fuera
-# fijo estaría igual en los 9 canales y volveríamos al problema del terreno
-# estático, donde lo que no cambia se aprende como fondo.
+# El campo de ráfagas es POR MANCHAS y se resortea en cada frame: fijo estaría
+# igual en los 9 canales y volvería el problema del terreno estático.
 SMOKE_TURBULENCE_PROB = 0.14
 SMOKE_TURBULENCE_AMPLITUDE = (0.35, 1.0)
 SMOKE_TURBULENCE_CELL = 16
@@ -326,17 +193,11 @@ SMOKE_TURBULENCE_CELL = 16
 # aparecen 1-2 imágenes DESPUÉS del humo, nunca junto con el fogonazo.
 TRAJECTORY_LAUNCH_RANGE = (0.10, 0.70)
 
-# Tiempo de vuelo del fragmento, como fracción del tramo post-ignición.
-#
-# Medido siguiendo el mismo arco por frames consecutivos en dos referencias:
-# Video 4 (f480→f660) y Video 3 (f600→f780) tardan 3 pasos sobre tramos de ~7,
-# o sea ~0.43 en las dos — pese a que el arco de Video 3 es un orden de magnitud
-# más largo que los de Video 4. Por eso el rango es estrecho y no depende del
-# largo del recorrido; el porqué está en trajectories.py::_progress_window.
-#
-# No depende tampoco de cuántos frames tenga la secuencia: al expresarse como
-# fracción del tramo, agregar frames cambia la resolución temporal con que se
-# muestrea la explosión, no la física de la explosión.
+# Tiempo de vuelo del fragmento, como fracción del tramo post-ignición. Medido
+# siguiendo el mismo arco por frames consecutivos en dos referencias: ~0.43 en las
+# dos, pese a que un arco es un orden de magnitud más largo que el otro. Por eso
+# el rango es estrecho y NO depende del largo del recorrido ni de cuántos frames
+# tenga la secuencia.
 TRAJECTORY_DURATION_RANGE = (0.30, 0.55)
 
 # Cota superior de trayectorias por imagen (main.py sortea 15-30 rectas, 15-30
@@ -434,26 +295,15 @@ class _StageRecorder:
             if s["name"] == "trajectories":
                 # Las trayectorias no se fechan por diferencia sino por el punto
                 # del recorrido en que se alcanzó cada píxel, que trajectories.py
-                # anotó durante el dibujo. Es lo que hace que la trayectoria se
-                # retraiga por la punta en vez de desvanecerse entera.
+                # anotó al dibujar. Es lo que hace que se retraigan por la punta
+                # en vez de desvanecerse enteras.
                 #
-                # Pero se INTERSECA con `changed`, y ese detalle importa: el
-                # progress_map está definido en todo píxel por donde la
-                # trayectoria pasó, incluidos aquellos donde quedó oculta bajo el
-                # núcleo del humo (ver _SMOKE_OVERRIDE_PROB en trajectories.py).
-                # Ahí no dibujó nada, así que fecharlos hacía que compose
-                # reemitiera el HUMO a brillo pleno en el frame en que pasaba la
-                # trayectoria — un píxel que no cambió apareciendo como si
-                # hubiera cambiado. Medido el 2026-08-13 sobre el recorrido:
-                #
-                #   11.6%  la trayectoria cambió el tensor (visible)  p50  52
-                #   73.4%  solo dejó etiqueta, sin tinta              p50   0
-                #   14.9%  no cambió NADA (oculta bajo el humo)       p50  72, 29.5% > 100
-                #
-                # Ese último tramo era la mitad de los píxeles > 100 del canal.
-                # El del medio se conserva a propósito: es el caso conocido de
-                # etiqueta sin evidencia visible, es oscuro (max 40) y sacarlo
-                # sería otra decisión.
+                # Se INTERSECA con `changed`, y ese detalle importa: el
+                # progress_map está definido también donde la trayectoria quedó
+                # oculta bajo el núcleo del humo, y ahí no dibujó nada. Fecharlos
+                # hacía que compose reemitiera el HUMO a brillo pleno en el frame
+                # en que pasaba la trayectoria — el 15% del recorrido, y la mitad
+                # de los píxeles > 100 del canal.
                 progress = s["ctx"]["progress_map"]
                 birth = np.where(np.isfinite(progress) & changed,
                                  self.ignition + progress * self._span, np.inf)

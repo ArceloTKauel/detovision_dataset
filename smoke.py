@@ -1,27 +1,22 @@
 """
-smoke.py - Generación de humo con textura orgánica y manchas sustractivas.
+smoke.py - Dibujo de la pluma de humo, sus filamentos y sus sub-nubes.
 
-Dibuja el humo de la explosión alrededor de los centros de impacto usando
-un modelo de zonas concéntricas (core, mid, outer, fringe) con distorsión
-Perlin para bordes irregulares. Luego genera polígonos aleatorios que
-"recortan" huecos dentro del humo, simulando manchas/huecos realistas.
+La pluma es una unión de círculos. Dónde se colocan lo decide
+_SMOKE_SHAPE_MODE y cómo se pintan _SMOKE_RENDER_MODE; ver la sección de
+constantes.
 
 Funciones:
-    - draw_smoke(tensor, centers, smoke_radius, rng, mask): Dibuja el humo
-      completo sobre el tensor. Usa distancia mínima a cualquier centro para
-      determinar la zona, y Perlin noise para distorsionar radios y variar
-      brillo. Si se pasa mask, marca los píxeles de humo como clase 1
-      (y borra de la mask donde caen las manchas sustractivas).
-    - draw_smoke_filaments(tensor, line, smoke_radius, rng, mask): Dibuja la
-      periferia filamentosa — estrías que irradian desde la línea de tiro. Es
-      lo que draw_smoke no puede dar por construcción (ver _FILAMENT_*).
-    - draw_white_blobs(tensor, smoke_radius, rng, mask): Dibuja sub-nubes de
-      "humo blanco" (piso de brillo 130) reutilizando draw_smoke sobre un
-      centro y radio más chicos, simulando metralla/brasas incandescentes
-      agrupadas. Se llama después de draw_smoke.
-    - measure_smoke_width(tensor, origin, angle): Mide la distancia desde el
-      origen en una dirección dada hasta encontrar un píxel negro. Usado por
-      trajectories.py para que las trayectorias empiecen fuera del humo.
+    - draw_smoke(tensor, centers, smoke_radius, rng, mask): dibuja la pluma
+      alrededor de los pozos de la línea de tiro y marca clase 1 en la máscara.
+    - draw_smoke_filaments(tensor, line, smoke_radius, rng, mask): estrías
+      radiales desde la línea de tiro. Devuelve qué píxeles son humo solo por
+      los filamentos, que trajectories.py usa para decidir qué trayectoria se ve
+      sobre la pluma.
+    - draw_white_blobs(tensor, smoke_radius, rng, mask): sub-nubes
+      incandescentes dentro del humo, reutilizando draw_smoke con un piso de
+      brillo alto.
+    - measure_smoke_width(tensor, origin, angle): hasta dónde llega el humo en
+      una dirección. La usa trajectories.py para arrancar fuera de la pluma.
 """
 
 import numpy as np
@@ -30,20 +25,14 @@ from PIL import Image, ImageDraw, ImageFilter
 from canvas import sample_on_line
 from perlin_noise import perlin_noise_2d
 
-# Escala de brillo global de la explosión: sortea una vez por imagen (en
-# main.py, vía sample_brightness_scale) y se aplica tanto al humo como a los
-# centros camuflados debajo (ver canvas.py::draw_center), para que ninguno
-# sature a blanco pleno. Acerca el rango dinámico al de las referencias sin
-# binarizar (mascara_cambios_final_sinbin_*), que nunca llegan a blanco puro.
+# Escala de brillo global de la explosión, sorteada una vez por imagen en
+# main.py. La comparten el humo y los centros camuflados debajo, para que
+# ninguno sature a blanco pleno: las referencias sin binarizar nunca llegan a 255.
 SMOKE_BRIGHTNESS_SCALE_RANGE = (0.45, 0.70)
 
-# Rango objetivo de la clase humo (medido con pixel_inspector_gui.py): 15 a
-# 255. _SMOKE_BRIGHTNESS_FLOOR evita que cualquier píxel dibujado como humo
-# quede por debajo de 15 (se aplica en el clip de cada zona). El resto del
-# pipeline (brightness_scale, grain, etc.) ya mantiene el grueso del humo
-# bien por debajo de 255; los "flecos" definidos más abajo son la única vía
-# para que un píxel puntual llegue cerca de blanco pleno, y con probabilidad
-# baja a propósito (ver _HOT_FLECK_PROB).
+# Piso de brillo de un píxel de humo. El rango objetivo de la clase, medido con
+# pixel_inspector_gui.py, es 15 a 255; los flecos son la única vía para acercarse
+# al techo.
 _SMOKE_BRIGHTNESS_FLOOR = 15
 
 # ── Forma de la pluma ──────────────────────────────────────────────────────
@@ -169,38 +158,21 @@ _HOT_FLECK_PROB = 0.01
 _HOT_FLECK_RANGE = (200, 255)
 
 # Manchas sustractivas: polígonos que recortan huecos dentro del humo.
-#
-# _SMOKE_ERASE_COUNT_RANGE es cuántos por explosión; estaba en línea como
-# rng.integers(15, 45).
-#
-# _SMOKE_ERASE_DEPTH es qué fracción del brillo SOBREVIVE al recorte. 0.0 borra a
-# negro puro, que es lo que hacía hasta ahora; 1.0 desactiva el efecto. Se sacó a
-# constante porque borrar a negro tiene dos problemas contra el frame real: ahí la
-# pluma es continua y no tiene un solo hueco, y además el recorte limpia la
-# máscara (`mask_region[erase_mask] = 0`), o sea que mete fondo etiquetado en
-# medio del humo.
-# Barrido del 2026-08-17, cantidad x profundidad, semilla 7: la palanca que
-# decide es la PROFUNDIDAD, no la cantidad. Bajar la cantidad de 15-45 a 3-8
-# apenas cambia la lectura; dejar de borrar a negro sí. Por eso la cantidad se
-# queda como estaba —las manchas aportan el moteado interno que la pluma
-# necesita— y lo que cambia es que ahora atenúan en vez de perforar.
+# _SMOKE_ERASE_DEPTH es qué fracción del brillo SOBREVIVE al recorte; 0.0 borra a
+# negro y además limpia la etiqueta, o sea que mete fondo etiquetado en medio de
+# la pluma. Barrido: la palanca que decide es la profundidad, no la cantidad.
 _SMOKE_ERASE_COUNT_RANGE = (15, 45)
 _SMOKE_ERASE_DEPTH = 0.35
 
-# Blobs de humo blanco: sub-nubes de metralla/brasas incandescentes dentro del
-# humo, reutilizando draw_smoke (mismas zonas core/mid/outer/fringe + Perlin)
-# sobre un centro y radio más chicos, en vez de un patrón ad hoc. El piso de
-# brillo alto (_WHITE_BLOB_BRIGHTNESS_FLOOR) es lo que las distingue del humo
-# gris normal: incluso la zona fringe (la de probabilidad más baja) nunca cae
-# por debajo de 130, así que el borde disperso del blob queda como racimo de
-# puntos brillantes en vez de humo gris tenue (ver referencia
-# mascara_cambios_final_sinbin_1.png). Independiente de brightness_scale del
-# humo principal, igual que los flecos: deben resaltar aunque la explosión
-# haya salido "apagada".
+# Sub-nubes de metralla o brasas incandescentes dentro del humo. Reutilizan
+# draw_smoke sobre un centro y radio más chicos; lo que las distingue del humo
+# gris es el piso de brillo alto, que deja hasta su borde disperso como racimo de
+# puntos brillantes. Independientes de brightness_scale: deben resaltar aunque la
+# explosión salga apagada.
 _WHITE_BLOB_PROB = 0.7
 _WHITE_BLOB_COUNT_RANGE = (1, 2)
 _WHITE_BLOB_RADIUS_RATIO = (0.35, 0.6)  # fracción de smoke_radius
-_WHITE_BLOB_SCALE_RANGE = (0.7, 1.0)  # análogo a brightness_scale, cercano a blanco
+_WHITE_BLOB_SCALE_RANGE = (0.7, 1.0)
 _WHITE_BLOB_BRIGHTNESS_FLOOR = 130
 
 
@@ -415,19 +387,10 @@ def draw_smoke(
     # Grilla de coordenadas de la región
     ys, xs = np.mgrid[min_y:max_y, min_x:max_x]
 
-    # Forma de la pluma: unión de LÓBULOS de radios distintos, no una salchicha.
-    #
-    # Antes esto era la distancia al centro más cercano de la fila de pozos, o
-    # sea la curva paralela a la línea de tiro, ondulada después por un Perlin
-    # suave de ±30%. Eso da un contorno liso y cerrado — el "ameba" que marcó el
-    # equipo. En las referencias reales la nube es una COLIFLOR: muchos bultos
-    # redondos de tamaños distintos apilados, cada uno con su propia cabeza.
-    #
-    # Se resuelve con un campo NORMALIZADO: cada fuente aporta distancia/su
-    # radio, y se toma el mínimo. Una fuente chica genera un bulto chico y una
-    # grande uno grande, y la unión de todas da el borde lobulado. El campo se
-    # devuelve escalado a smoke_radius para que las zonas de abajo (core, mid,
-    # outer) sigan expresadas en fracciones del radio como siempre.
+    # Campo NORMALIZADO: cada fuente aporta distancia/su radio y se toma el
+    # mínimo, así una fuente chica genera un bulto chico y la unión de todas da el
+    # borde lobulado. Se escala a smoke_radius para que las zonas de más abajo
+    # sigan expresadas en fracciones del radio.
     def banda_de_borde(d):
         """Cuánto pesa el reborde a distancia normalizada `d` del centro de una
         fuente: máximo justo sobre su borde (d = 1) y cae a los lados."""
@@ -585,20 +548,10 @@ def draw_smoke(
     grain_factor = (0.55 + 0.45 * grain) * shading * volumen
 
     if _SMOKE_RENDER_MODE == "aros":
-        # === MODO ARO ===
-        # Cada círculo del apilado se estampa como un ANILLO, no como un disco.
-        #
-        # Por qué: un canal del dataset es un absdiff, y en el heatmap real
-        # (video_diff_heatmap_blocks_outputs/) la pluma se ve como un racimo de
-        # arcos brillantes con el interior oscuro — el interior de un bulto casi
-        # no cambia entre frames, su borde en avance sí. Ver 20_real_heatmap_zoom.
-        #
-        # No se deriva del campo de distancias como hacía _SMOKE_RIM_CONTRAST: ahí
-        # el anillo salía perforado, porque después pasaba por las cuatro zonas
-        # probabilísticas (mid 90->50%, outer 60->0%, fringe 15%) que están
-        # pensadas para difuminar el borde de una nube RELLENA. Estampar directo
-        # evita ese filtro y de paso hace innecesarias las zonas, el reborde
-        # derivado y el sombreado.
+        # Cada círculo del apilado se estampa como un ANILLO. No se deriva del
+        # campo de distancias con _SMOKE_RIM_CONTRAST: por ahí el anillo sale
+        # perforado, porque después pasa por las zonas probabilísticas de más
+        # abajo, que están para difuminar el borde de una nube rellena.
         tinta = np.zeros((region_h, region_w), dtype=np.float64)
         n = len(fuentes_y)
         picos = rng.uniform(*_SMOKE_RING_BRIGHTNESS, size=n)
@@ -746,90 +699,62 @@ def draw_smoke(
 
 
 # ── Filamentos radiales ────────────────────────────────────────────────────
-# El humo real no es un blob liso: son miles de estrías finas que irradian desde
-# la línea de tiro (polvo y escombro con motion blur). draw_smoke no puede
-# producirlas ni con otros parámetros — está construido como zonas de distancia,
-# o sea f(min_dist), y por lo tanto no tiene noción de dirección: la isotropía
-# es estructural. Estas partículas-estría aportan esa textura, y como salen de
-# una línea y no de un punto, la pluma queda alargada sola.
+# Estrías finas que irradian desde la línea de tiro: polvo y escombro con motion
+# blur. draw_smoke no puede producirlas ni con otros parámetros — está construido
+# como zonas de distancia, o sea f(min_dist), y por lo tanto no tiene noción de
+# dirección. Como salen de una línea y no de un punto, la pluma queda alargada.
 #
-# Se dibujan DESPUÉS de draw_smoke a propósito: sus manchas sustractivas operan
-# sobre `mask_region == 1`, así que si los filamentos ya estuvieran marcados,
-# los perforaría también.
-# CANTIDAD, bajada al 10% (era 1400-3200) el 2026-08-17.
+# Se dibujan DESPUÉS de draw_smoke: sus manchas sustractivas operan sobre la
+# máscara de humo, así que si los filamentos ya estuvieran marcados los perforaría.
+
+# Cantidad de estrías por explosión. Bajada de 1400-3200 a un décimo: medido
+# sobre 4 semillas, los filamentos ponían entre el 40% y el 87% de la clase humo,
+# o sea que la pluma ERA las estrías y cualquier ajuste de la silueta quedaba
+# enterrado debajo. Con el cuerpo en 1.20, el barrido dio 100% erizo, 33% peluda,
+# 10% nube con espolvoreo, 0% nube limpia; se dejó 10% y no 0 para conservar algo
+# de textura fibrosa, que es con lo que se entrenó v18.
 #
-# Medido sobre 4 semillas del pipeline completo, entre el 40% y el 87% de la
-# clase humo la ponían los filamentos y no draw_smoke: la pluma ERA las estrías,
-# y cualquier ajuste de la silueta quedaba enterrado debajo. Contra el frame real
-# que trajo el equipo —una masa blanda y compacta, con bultos redondos y sin una
-# sola estría visible— eso se leía como diente de león.
+# Se toca solo la CANTIDAD: el largo, el ancho y el curl describen cómo es UNA
+# estría y siguen midiendo bien.
 #
-# Barrido de supresión, con el cuerpo ya en 1.20: 100% erizo, 33% peluda, 10%
-# nube con un espolvoreo de estrías, 0% nube limpia. Se eligió 10% y no 0 para
-# conservar algo de la textura fibrosa, que es con lo que se entrenó v18 (el
-# mejor resultado hasta la fecha) — si la pérdida de fibra resulta costar
-# precisión, el camino de vuelta es este número y no la forma.
-#
-# Se toca SOLO la cantidad a propósito. El largo, el ancho (_FILAMENT_WIDTH_PX,
-# elegido con coherencia de orientación y pendiente espectral sobre 30 semillas)
-# y el curl describen cómo es UNA estría y siguen valiendo; lo que estaba mal era
-# cuántas había.
-#
-# CONSECUENCIA a vigilar: draw_smoke_filaments devuelve `filament_region`, que
-# trajectories.py usa para decidir qué trayectoria se ve sobre la pluma y cuál
-# queda oculta (_SMOKE_OVERRIDE_PROB). Con 10x menos estrías esa periferia se
-# achica, así que más trayectorias caen en el núcleo y quedan ocultas.
+# A vigilar: draw_smoke_filaments devuelve `filament_region`, que trajectories.py
+# usa para decidir qué trayectoria se ve sobre la pluma. Con 10x menos estrías esa
+# periferia se achica y más trayectorias quedan ocultas en el núcleo.
 _FILAMENT_COUNT_RANGE  = (140, 320)
-# Arranque de la estría, en fracción de smoke_radius: NO puede ser 0. Si todas
-# salen desde la línea misma, la densidad se apila ahí y el núcleo revienta a
-# blanco puro, tapando toda la estructura. Repartir los arranques sobre un
-# anillo distribuye el depósito y deja el núcleo para draw_smoke.
+# Arranque de la estría en fracción de smoke_radius. NO puede ser 0: si todas
+# salen de la línea misma, la densidad se apila ahí y el núcleo revienta a blanco.
 _FILAMENT_START_RATIO  = (0.10, 1.00)
 _FILAMENT_LENGTH_RATIO = (0.40, 3.00)    # fracción de smoke_radius
 _FILAMENT_LENGTH_SKEW  = 1.8             # >1 sesga a estrías cortas, con cola larga
 _FILAMENT_BRIGHTNESS   = (60.0, 190.0)
 _FILAMENT_FALLOFF_EXP  = 1.5             # cómo se apaga la estría hacia la punta
 _FILAMENT_CURL         = 0.30            # deriva angular: las estrías no son rectas
-# Sin esto la pluma irradia 360° parejo y sale un diente de león. Las reales son
-# abanicos volcados hacia un lado (el material sale contra la cara del banco, y
-# la gravedad y el viento hacen el resto). Escala el largo de la estría según su
-# ángulo respecto de una dirección preferente sorteada por imagen: el largo va
-# de (1-A) a (1+A) veces el nominal.
+# Vuelca el abanico hacia un lado en vez de irradiar 360° parejo, que salía como
+# diente de león. Escala el largo según el ángulo: de (1-A) a (1+A) del nominal.
 _FILAMENT_ANISOTROPY   = 0.65
-# El ensanchado tiene que ser PERPENDICULAR a la estría, no isótropo. Con
-# dispersión isótropa + blur (0.6/0.6) también se difumina a lo largo, la estría
-# se vuelve pelusa y la coherencia de orientación cae de 0.307 a 0.234. Pero
-# dejarlo en 0 da líneas duras de un píxel: eso mete demasiada energía de alta
-# frecuencia y aleja la pendiente espectral de la de las referencias (-1.92
-# contra -2.18). Ensanchar solo en perpendicular da ancho y suavidad sin perder
-# la estructura lineal — que es lo que hace el motion blur real.
-# 2.2 px medido sobre 30 semillas: es el único valor probado que mejora las DOS
-# métricas a la vez respecto de no tener filamentos (coherencia 0.242 -> 0.274,
-# y la pendiente espectral queda a 0.02 del objetivo en vez de a 0.04). Con
-# 0.9 px la coherencia sube más (0.302) pero la pendiente se va a -1.90 contra
-# -2.18 de las referencias, o sea se gana textura metiendo ruido de alta
+# Ancho de la estría, en píxeles, ensanchando PERPENDICULAR y no isótropo. Medido
+# sobre 30 semillas, 2.2 px es el único valor probado que mejora a la vez la
+# coherencia de orientación (0.242 -> 0.274) y la pendiente espectral (queda a
+# 0.02 del -2.18 de las referencias). Con dispersión isótropa la estría se vuelve
+# pelusa y la coherencia cae a 0.234; con 0.9 px la coherencia sube más pero la
+# pendiente se va a -1.90, o sea que se gana textura metiendo ruido de alta
 # frecuencia que las reales no tienen.
 _FILAMENT_WIDTH_PX     = 2.2
 _FILAMENT_WIDTH_OFFSETS = np.array([-1.0, 0.0, 1.0])
 _FILAMENT_WIDTH_WEIGHTS = np.array([0.6, 1.0, 0.6])
 _FILAMENT_BLUR         = 0.0
-# El acumulador se renormaliza por su propio percentil 99 a este nivel, en vez
-# de depender de las constantes de arriba: así cambiar cantidad o largo altera
-# la FORMA de la pluma sin volver a saturarla, que es lo que pasaba antes.
+# El acumulador se renormaliza por su propio percentil 99 a este nivel, así que
+# cambiar cantidad o largo altera la FORMA de la pluma sin volver a saturarla.
 _FILAMENT_PEAK_LEVEL   = 205.0
-# Umbral de DENSIDAD (no de brillo) para marcar clase humo. Se aplica sobre el
-# acumulador ya renormalizado y antes de brightness_scale, así que la máscara no
-# se mueve si la explosión sale más clara o más apagada.
+# Umbral de DENSIDAD (no de brillo) para marcar clase humo, aplicado antes de
+# brightness_scale para que la máscara no se mueva con la exposición.
 _FILAMENT_MASK_LEVEL   = 14.0
-# NOTA: hubo una versión (commits 1e63def/6da70d3, revertida) que reclasificaba
-# como trayectoria el 12% de estrías de mayor alcance. Se descartó: el criterio
-# era aleatorio respecto a la geometría (una estría de humo y una de
-# "trayectoria" son la misma textura, etiquetadas distinto según un cuantil),
-# que es exactamente la ambigüedad que el rediseño de humo fibroso vino a
-# eliminar. La periferia filamentosa vuelve a ser 100% humo; la ambigüedad
-# humo/trayectoria se modela ahora con geometría real — ver
-# trajectories.py::_SMOKE_OVERRIDE_PROB (las trayectorias que sí atraviesan la
-# pluma se dibujan y etiquetan por encima de ella).
+# Callejón sin salida ya probado (commits 1e63def/6da70d3, revertidos):
+# reclasificar como trayectoria el 12% de estrías de mayor alcance. El criterio
+# era aleatorio respecto de la geometría —una estría de humo y una de trayectoria
+# son la misma textura, etiquetadas según un cuantil— que es justo la ambigüedad
+# que el humo fibroso vino a eliminar. La ambigüedad se modela con geometría real
+# en trajectories.py::_SMOKE_OVERRIDE_PROB.
 
 
 def draw_smoke_filaments(

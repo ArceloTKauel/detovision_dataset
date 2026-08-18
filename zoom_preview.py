@@ -19,6 +19,8 @@ DEFAULT_ZOOM = 6
 
 
 def make_zoom(image_path: str, box: tuple[int, int, int, int], zoom: int, out_path: str | None = None) -> str:
+    """Recorta una ventana alrededor de (cy, cx) y la amplía por vecino más
+    cercano, para inspeccionar píxeles sin que el remuestreo los mezcle."""
     img = Image.open(image_path)
     crop = img.crop(box)
     crop = crop.resize((crop.width * zoom, crop.height * zoom), Image.NEAREST)
@@ -32,6 +34,7 @@ def make_zoom(image_path: str, box: tuple[int, int, int, int], zoom: int, out_pa
 
 
 def main():
+    """Escribe los recortes ampliados de las imágenes indicadas por línea de comandos."""
     parser = argparse.ArgumentParser(description="Genera un recorte ampliado de una imagen.")
     parser.add_argument("image", help="Ruta de la imagen a recortar")
     parser.add_argument("--box", type=int, nargs=4, metavar=("X0", "Y0", "X1", "Y1"),

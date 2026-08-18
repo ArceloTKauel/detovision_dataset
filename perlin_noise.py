@@ -19,6 +19,9 @@ import numpy as np
 
 
 def perlin_noise_2d(shape: tuple[int, int], scale: float, rng: np.random.Generator, octaves: int = 4) -> np.ndarray:
+    """Campo de ruido fractal [shape] en [0, 1]. `scale` es el tamaño de celda en
+    píxeles y `octaves` cuántas capas se suman, cada una al doble de frecuencia y
+    la mitad de amplitud."""
     h, w = shape
     noise = np.zeros((h, w))
 

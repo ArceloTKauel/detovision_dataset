@@ -2,9 +2,9 @@
 main.py - Punto de entrada del generador de dataset sintético de explosiones.
 
 Orquesta el pipeline completo de generación en un solo pase: dibuja el terreno,
-crea el lienzo, genera la zona de impacto (cuadrilátero), distribuye centros de
-metralla, dibuja el humo con textura Perlin (más sub-nubes de humo blanco
-simulando brasas) y sus filamentos, traza franjas de derrumbe (opcional) y
+crea el lienzo, genera la línea de tiro (la fila de pozos cargados), distribuye
+centros de metralla, dibuja el humo y sus filamentos, traza franjas de derrumbe
+(opcional) y
 trayectorias rectas, parabólicas y de sobrevuelo, y produce simultáneamente dos
 salidas:
     - Imagen en escala de grises (entrada del dataset): el humo queda en
@@ -43,6 +43,8 @@ from export import tensor_to_image, mask_to_rgb
 
 HEIGHT = 512
 WIDTH = 768
+# Clase 3 (derrumbe) desactivada: implementada y validada, pero fuera del
+# alcance del modelo por ahora.
 DRAW_LANDSLIDES = False
 
 
@@ -158,7 +160,6 @@ def generate_explosion(
     # Se dibuja al final para que respete la prioridad humo > trayectoria >
     # derrumbe > fondo, y nunca pasa por encima de la zona de la explosión
     # (exclusion_radius cubre el centro + los fragmentos + el humo).
-    # Desactivado temporalmente: DRAW_LANDSLIDES = False deshabilita la clase 3.
     if DRAW_LANDSLIDES and rng.random() < 0.4:
         centers_arr = np.array(centers, dtype=np.float64)
         max_center_dist = np.sqrt(((centers_arr - origin) ** 2).sum(axis=1)).max()

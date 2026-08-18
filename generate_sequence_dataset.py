@@ -1,28 +1,23 @@
-#
-# Generación masiva del dataset temporal.
-#
-# A diferencia de generate_dataset.py, que produce una imagen final por
-# explosión, acá cada explosión produce una SECUENCIA por ventanas: cada frame
-# muestra solo lo que nace en su tramo, no el acumulado. Ver sequence.py para la
-# semántica exacta.
-#
-# La unidad de entrenamiento es un BLOQUE de BLOCK_SIZE frames consecutivos, que
-# el modelo recibe apilados como canales — (batch, 9, alto, ancho). Cada bloque
-# lleva UNA máscara: la unión de lo que muestran sus 9 frames.
-#
-# Estructura de salida, una carpeta de 9 entradas y un archivo de target por
-# bloque, con el mismo stem para que la correspondencia sea obvia:
-#
-#     dataset_sequences/
-#         inputs/00000_00/000.png ... 008.png   → 9 canales, escala de grises
-#         targets/00000_00.png                  → 1 máscara RGB del bloque
-#
-# Por qué el target es la unión del bloque y no el acumulado desde el principio:
-# cada bloque es una pasada independiente del modelo, que no vio los bloques
-# anteriores. Pedirle el acumulado sería pedirle que recuerde algo que no está
-# en su entrada. Si producción quiere un heatmap corrido, acumula las salidas
-# del modelo — que es exactamente lo que hacía el script de video antes de que
-# se separaran las ventanas.
+"""
+generate_sequence_dataset.py - Generación masiva del dataset temporal.
+
+A diferencia de generate_dataset.py, cada explosión produce una SECUENCIA por
+ventanas: cada frame muestra solo lo que nace en su tramo, no el acumulado (ver
+sequence.py).
+
+La unidad de entrenamiento es un BLOQUE de BLOCK_SIZE frames consecutivos, que el
+modelo recibe apilados como canales — (batch, 9, alto, ancho) — con UNA máscara
+por bloque, la unión de lo que muestran sus frames.
+
+Estructura de salida, mismo stem para que la correspondencia sea obvia:
+    dataset_sequences/inputs/00000_00/000.png ... 008.png   9 canales
+    dataset_sequences/targets/00000_00.png                  máscara RGB
+
+Por qué el target es la unión del bloque y no el acumulado desde el principio:
+cada bloque es una pasada independiente del modelo, que no vio los anteriores.
+Pedirle el acumulado sería pedirle que recuerde algo que no está en su entrada;
+si producción quiere un heatmap corrido, acumula las salidas del modelo.
+"""
 
 import os
 from multiprocessing import Pool
@@ -104,6 +99,7 @@ def generate_single(index: int) -> int:
 
 
 def main():
+    """Genera TOTAL_SEQUENCES secuencias en paralelo y reporta el avance."""
     os.makedirs(os.path.join(DATASET_DIR, "inputs"), exist_ok=True)
     os.makedirs(os.path.join(DATASET_DIR, "targets"), exist_ok=True)
 
