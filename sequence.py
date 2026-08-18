@@ -308,7 +308,27 @@ class _StageRecorder:
                 birth = np.where(np.isfinite(progress) & changed,
                                  self.ignition + progress * self._span, np.inf)
             elif s["name"] in ("smoke", "filaments"):
-                frac = np.clip(dist / reach, 0.0, 1.0) ** SMOKE_GROWTH_EXPONENT
+                # El humo se fecha POR CÍRCULO, no por la distancia del píxel a
+                # la línea de tiro: draw_smoke deja en `smoke_order` el orden de
+                # nacimiento del círculo que posee cada píxel.
+                #
+                # Fechar por distancia del píxel funcionaba con el render de
+                # zonas, donde la pluma era un campo de distancia suave. Con el
+                # render de aros la tinta vive en círculos dispersos, y cortarlos
+                # por distancia los rebana en FRANJAS PARALELAS a la línea de
+                # tiro: medido, todos los píxeles que nacían en un mismo frame
+                # quedaban a la misma distancia con desviación de 1-2 px, y la
+                # pluma se veía como una barra horizontal de bordes duros.
+                #
+                # Los filamentos siguen fechándose por distancia, que para ellos
+                # es correcto: nacen de la línea y se alargan hacia afuera.
+                orden = s["ctx"].get("smoke_order")
+                base = np.clip(dist / reach, 0.0, 1.0)
+                if orden is not None:
+                    # los píxeles sin círculo dueño (sub-nubes blancas, que se
+                    # dibujan en la misma etapa) caen de vuelta a la distancia
+                    base = np.where(np.isfinite(orden), np.nan_to_num(orden), base)
+                frac = base ** SMOKE_GROWTH_EXPONENT
                 birth = np.where(changed, self.ignition + frac * self._span, np.inf)
             else:
                 # Fogonazo y centros: aparecen completos de golpe en la ignición.

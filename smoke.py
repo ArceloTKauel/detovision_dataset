@@ -402,8 +402,15 @@ def draw_smoke(
     brightness_scale: float = 1.0,
     brightness_floor: int = _SMOKE_BRIGHTNESS_FLOOR,
     include_extras: bool = True,
+    order_map: np.ndarray | None = None,
 ) -> None:
     """
+    order_map: si se pasa, se rellena con el ORDEN DE NACIMIENTO del círculo que
+        posee cada píxel, normalizado a [0, 1] por su distancia a la fila de
+        pozos. Es el gancho de la generación temporal: sequence.py lo usa para
+        fechar el humo por círculo en vez de por distancia al pixel, que cortaba
+        la pluma en franjas paralelas a la línea de tiro. Los píxeles no
+        dibujados quedan en NaN. No altera la imagen.
     brightness_floor: piso de brillo aplicado al clip de cada zona (ver
         _SMOKE_BRIGHTNESS_FLOOR). draw_white_blobs reusa esta función con un
         piso más alto para generar sub-nubes de "humo blanco".
@@ -575,6 +582,18 @@ def draw_smoke(
         owner[gana] = i
         np.maximum(rim, banda_de_borde(d), out=rim)
 
+    # Orden de nacimiento por CÍRCULO: su distancia a la fila de pozos,
+    # normalizada por un percentil alto (no por el máximo, que lo decidiría un
+    # solo círculo lejano). La pluma sigue creciendo desde la línea hacia afuera,
+    # pero la unidad que nace es el círculo entero y no una franja de píxeles.
+    if order_map is not None:
+        d_fuente = np.full(len(fuentes_y), np.inf)
+        for cy_c, cx_c in centers:
+            np.minimum(d_fuente, np.hypot(fuentes_y - cy_c, fuentes_x - cx_c),
+                       out=d_fuente)
+        tope = max(float(np.percentile(d_fuente, 98)), 1e-6)
+        orden_fuente = np.clip(d_fuente / tope, 0.0, 1.0)
+
     min_dist = normalized * smoke_radius
     shading = (1.0 - _SMOKE_RIM_CONTRAST) + _SMOKE_RIM_CONTRAST * rim
 
@@ -682,6 +701,8 @@ def draw_smoke(
         np.maximum(region, brillo.astype(np.uint8), out=region)
         if mask_region is not None:
             mask_region[dibujado] = 1
+        if order_map is not None:
+            order_map[min_y:max_y, min_x:max_x][dibujado] = orden_fuente[owner[dibujado]]
 
         if include_extras:
             # En aros no hay `core` que proteger ni campo distorsionado: se le

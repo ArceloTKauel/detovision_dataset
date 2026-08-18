@@ -118,7 +118,11 @@ def generate_explosion(
     # Humo: radio proporcional al tamaño del lienzo
     base_length = min(height, width) * rng.uniform(0.25, 0.40)
     smoke_radius = base_length * rng.uniform(0.15, 0.3)
-    draw_smoke(tensor, centers, smoke_radius, rng, mask, brightness_scale=brightness_scale)
+    # order_map viaja hasta sequence.py por el observer: es el orden de
+    # nacimiento POR CÍRCULO, y no altera la imagen (ver smoke.py::draw_smoke).
+    smoke_order = np.full((height, width), np.nan, dtype=np.float32)
+    draw_smoke(tensor, centers, smoke_radius, rng, mask,
+               brightness_scale=brightness_scale, order_map=smoke_order)
 
     # Sub-nubes de "humo blanco": reutiliza draw_smoke sobre un centro y radio
     # más chicos con piso de brillo alto, simulando metralla/brasas
@@ -128,7 +132,8 @@ def generate_explosion(
     # podría plantar el blob sobre una estría lejana y fina, desprendido de la
     # nube. Mismo problema que tuvo con el terreno en su momento.
     draw_white_blobs(tensor, smoke_radius, rng, mask)
-    notify("smoke", blast_line=blast_line, smoke_radius=smoke_radius)
+    notify("smoke", blast_line=blast_line, smoke_radius=smoke_radius,
+           smoke_order=smoke_order)
 
     # Periferia filamentosa: estrías radiales desde la línea de tiro. Va después
     # de draw_smoke porque sus manchas sustractivas perforan todo lo que esté
