@@ -224,8 +224,35 @@ TERRAIN_DRIFT_MAX_OFFSET = 12.0
 # completarse como la periferia. Con escala común el núcleo cierra a media
 # secuencia y los filamentos siguen alargándose hasta el final, que es lo que se
 # ve en las referencias.
+#
+# EXPONENTE, subido de 1.0 a 2.0 el 2026-08-17. Con 1.0 el crecimiento es LINEAL
+# —un píxel al 50% del alcance nace justo a mitad del tramo— y eso contradecía lo
+# que dice el docstring de este módulo desde el principio: que la pluma crece
+# "rápido al principio". Medida la extensión acumulada por frame, salía una recta:
+#
+#   0  2  5  8 12 16 20 25 30 35 40 46 51 57 63 69 75 80 85 89 93 95 97 100
+#
+# El síntoma es de orden entre eventos: los fragmentos salen volando cuando la
+# pluma todavía es un hilo. Medido sobre 4 semillas, en el frame en que aparece la
+# PRIMERA trayectoria la pluma tenía apenas el 15% de su extensión final, y no
+# llegaba al 90% hasta el frame 22 de 27 — con las trayectorias volando desde el 8.
+#
+#   exp   pluma al salir la 1a trayectoria   pluma al 90%
+#   1.0            15.4%                       f22.0
+#   1.5            30.6%                       f20.0
+#   2.0            44.6%                       f18.2
+#   3.0            65.3%                       f15.5
+#
+# 2.0 y no 3.0 porque además de medir mejor tiene sentido físico: con exponente 2
+# el radio va como la raíz del tiempo, que es una expansión desacelerada de gas.
+# Con 3.0 la pluma aparece casi de golpe y se pierde la fase de crecimiento.
+#
+# OJO, esto NO cambia el ORDEN de aparición y no contradice la evidencia de
+# TRAJECTORY_LAUNCH_RANGE: el humo sigue empezando 4 frames antes que la primera
+# trayectoria, como dicen las referencias. Lo que cambia es la VELOCIDAD con que
+# se expande una vez que empezó.
 SMOKE_REACH_PERCENTILE = 98
-SMOKE_GROWTH_EXPONENT = 1.0
+SMOKE_GROWTH_EXPONENT = 2.0
 
 # Cómo se reparte en el tiempo la LLEGADA del humo a un píxel.
 #

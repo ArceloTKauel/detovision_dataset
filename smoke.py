@@ -46,46 +46,119 @@ SMOKE_BRIGHTNESS_SCALE_RANGE = (0.45, 0.70)
 # baja a propósito (ver _HOT_FLECK_PROB).
 _SMOKE_BRIGHTNESS_FLOOR = 15
 
-# ── Forma lobulada de la pluma ─────────────────────────────────────────────
-# El equipo marcó que el humo "parece un souffle de queso o ameba" y que debería
-# parecerse más a "una nube dibujada por un niño". Comparadas las vistas
-# acumuladas contra las referencias reales, la diferencia es concreta: la nube
-# real es una COLIFLOR de bultos redondos de tamaños distintos, y la nuestra un
-# contorno liso y cerrado.
+# ── Forma de la pluma ──────────────────────────────────────────────────────
+# La pluma es una unión de círculos. Son dos decisiones independientes: DÓNDE se
+# colocan y CÓMO se pintan.
 #
-# _SMOKE_LINE_RADIUS_FRAC es el grosor del cuerpo que envuelve la fila de pozos,
-# como fracción de smoke_radius. Es el piso de la forma: sin él los lóbulos
-# quedarían sueltos y la pluma no naciría de la línea de tiro.
+# Colocación (_SMOKE_SHAPE_MODE):
+#   "lobulos"  círculos empujados desde los pozos de la línea de tiro hasta el
+#              perímetro del cuerpo, más micro-nubes adentro. La silueta es
+#              emergente, no está definida en ningún lado.
+#   "casco"    se define primero la zona —el casco convexo de unos puntos
+#              sorteados alrededor de la línea— y se apilan círculos adentro,
+#              grandes primero. Separa la silueta de la textura.
 #
-# Los lóbulos se plantan sobre un pozo al azar y se empujan de ahí. Sus radios
-# van de _SMOKE_LOBE_RADIUS: el rango es ancho a propósito, porque lo que da la
-# lectura de coliflor es la MEZCLA de tamaños, no los bultos en sí.
-#
-# Valores de primer intento, puestos para mirarlos y ajustar — no hay medición
-# detrás todavía, a diferencia del resto de las constantes de este repo.
-_SMOKE_LINE_RADIUS_FRAC = 0.45
-_SMOKE_LOBE_COUNT = (6, 14)
-_SMOKE_LOBE_RADIUS = (0.35, 0.95)
-_SMOKE_LOBE_OFFSET = (0.0, 0.55)
+# Render (_SMOKE_RENDER_MODE):
+#   "zonas"    disco con zonas concéntricas (core/mid/outer/fringe). Es el
+#              render con el que se entrenó v18/v20.
+#   "aros"     anillo: la tinta vive en el borde. Un canal del dataset es un
+#              absdiff, y en el heatmap real
+#              (video_diff_heatmap_blocks_outputs/ESS_F04B2072_422, f444-540) la
+#              pluma son arcos brillantes con el interior oscuro — el interior de
+#              un bulto no cambia entre frames consecutivos, su borde en avance
+#              sí. El aro no es un efecto estético: es lo que produce la derivada
+#              de una nube que crece.
+_SMOKE_SHAPE_MODE = "casco"
+_SMOKE_RENDER_MODE = "aros"
 
-# Reborde de cada lóbulo. Es lo que separa una coliflor de una mancha.
+# Colocación por lóbulos. Dos condiciones que la primera versión no cumplía: el
+# bulto tiene que ser CHICO respecto del cuerpo —si no, unos pocos se comen la
+# silueta— y su centro caer SOBRE el perímetro (_SMOKE_LOBE_RING, 1.0 = justo en
+# el borde), porque con empuje desde 0 la mitad queda sepultada sin aportar al
+# contorno. El rango de radios es ancho a propósito: la lectura de nube la da la
+# mezcla de tamaños.
 #
-# Los lóbulos solos no alcanzaron: sin reborde, más lóbulos dan una mancha más
-# ancha y nada más. En las referencias cada cabeza tiene un borde nítido y claro
-# con el cuerpo más oscuro detrás, y eso es lo que se lee como volumen.
+# Las micro-nubes usan el mismo mecanismo pero se plantan ADENTRO, así que no
+# tocan la silueta: vuelven grumoso un interior que si no es un relleno parejo.
+_SMOKE_LINE_RADIUS_FRAC = 1.20
+_SMOKE_LOBE_COUNT = (10, 18)
+_SMOKE_LOBE_RADIUS = (0.18, 0.45)
+_SMOKE_LOBE_RING = (0.75, 1.15)
+_SMOKE_MICRO_COUNT = (20, 45)
+_SMOKE_MICRO_RADIUS = (0.08, 0.22)
+_SMOKE_MICRO_SPREAD = (0.0, 1.0)
+
+# Colocación por casco. _SMOKE_HULL_OVERLAP es cuánto tienen que separarse dos
+# círculos, en fracción de la suma de radios: 0.72 se desarma en burbujas, 0.45
+# masa coherente, 0.32 coherente y festoneada; por debajo vuelve a ser mancha.
 #
-# El reborde se calcula por lóbulo y se toma el MÁXIMO, no el mínimo como la
-# silueta: así se encienden también los bordes INTERNOS, los de un lóbulo que
-# queda por delante de otro. Con el mínimo solo se vería el contorno exterior de
-# la unión y volveríamos a la mancha.
+# El radio NO se ata a la distancia al borde aunque sea lo intuitivo: atándolo,
+# contra el borde se acumulan círculos diminutos que calcan la recta del casco y
+# la pluma sale con silueta de polígono.
 #
-# _SMOKE_RIM_WIDTH es el ancho de la banda, en unidades del radio del lóbulo.
-# _SMOKE_RIM_CONTRAST es cuánto se oscurece el cuerpo respecto del reborde: 0 lo
-# desactiva, 1 deja el cuerpo en negro.
+# LÍMITE: el casco es convexo, así que la pluma no puede tener concavidades y la
+# real sí las tiene. Si se nota, la salida no es tocar estos números sino dejar
+# de usar un casco convexo.
+_SMOKE_HULL_POINTS = (7, 12)
+_SMOKE_HULL_ALONG = (-0.10, 1.10)
+_SMOKE_HULL_ACROSS = (0.35, 1.70)
+_SMOKE_HULL_CANDIDATES = 400
+_SMOKE_HULL_RADIUS = (0.07, 0.40)
+_SMOKE_HULL_OVERLAP = 0.62
+
+# Render por aros. El umbral de máscara va sobre la tinta ANTES de
+# brightness_scale (mismo criterio que _FILAMENT_MASK_LEVEL) y tiene que quedar
+# por encima de lo que aporta el relleno, o el relleno etiqueta el interior sin
+# iluminarlo: con umbral 18 el 45% de los píxeles de clase humo quedaba en valor
+# <= 20, con 70 queda el 15%. Ese 15% es el precio del aro —un anillo tiene mucho
+# más borde que un disco— contra 1.4% del render de zonas.
 #
-# Valores de primer intento, para mirar y ajustar.
+# Subir _SMOKE_RIM_CONTRAST sobre el render de zonas NO es una alternativa para
+# llegar al aro: el anillo sale perforado por las zonas probabilísticas.
+_SMOKE_RING_WIDTH = 0.14
+_SMOKE_RING_BRIGHTNESS = (90.0, 230.0)
+_SMOKE_RING_WOBBLE = (0.04, 0.16)
+_SMOKE_RING_FILL = 0.12
+_SMOKE_RING_MASK_LEVEL = 70.0
+
+# Sombreado interno del render de zonas. Medido sobre 3 semillas, brillo de los
+# píxeles de clase humo:
+#
+#   off                 media 83.2   desv 43.1
+#   perlin (0.35)             72.0        38.3   <- oscurece Y aplana
+#   por_fuente (0.35)         89.3        48.7
+#   direccional (0.35)        83.2        43.4   <- no hace nada
+#
+# "perlin" BAJABA la desviación: en vez de agregar variación la quitaba, por eso
+# se leía como veladura. "direccional" es un callejón sin salida estructural y no
+# de parámetros — cada bulto recibe su lado claro y su lado oscuro, así que a
+# escala de pluma se promedia solo, y los 40-80 pozos del cuerpo dejan a cada
+# píxel cerca del centro de SU pozo, donde la proyección vale ~0.
+#
+# _SMOKE_SHADE_BLUR funde las fronteras entre fuentes vecinas; medido es
+# indistinto entre 0.0 y 0.12 a los tamaños actuales, queda como seguro por si
+# los lóbulos crecen.
+_SMOKE_SHADE_MODE = "por_fuente"
+_SMOKE_SHADE_SCALE = 2.5
+_SMOKE_SHADE_AMPLITUDE = 0.35
+_SMOKE_SHADE_BLUR = 0.07
+
+# Reborde de cada lóbulo en el render de zonas. Se calcula por lóbulo y se toma
+# el MÁXIMO, no el mínimo como la silueta, para que se enciendan también los
+# bordes internos; con el mínimo solo se vería el contorno exterior de la unión.
+# _SMOKE_RIM_CONTRAST es cuánto se oscurece el cuerpo: 0 lo desactiva, 1 lo deja
+# en negro.
+#
+# OJO, PENDIENTE: el 0.15 se eligió contra un FRAME DE VIDEO CRUDO, donde la
+# pluma tiene el interior claro. La vara que corresponde es el heatmap de
+# diferencias, donde el reborde ES la señal, y contra esa vara el valor debería
+# ser alto y no bajo.
 _SMOKE_RIM_WIDTH = 0.18
-_SMOKE_RIM_CONTRAST = 0.55
+_SMOKE_RIM_CONTRAST = 0.15
+
+# Cuánto corre el Perlin el borde de la pluma. A ±30% (el 0.6 original) los
+# bultos redondos se deshacen; a ±15% conservan la curva sin quedar de compás.
+_SMOKE_EDGE_NOISE = 0.30
 
 # Flecos brillantes: chispas/reflejos puntuales muy poco frecuentes que
 # rompen por encima del techo habitual del humo (~180) hasta casi blanco
@@ -94,6 +167,25 @@ _SMOKE_RIM_CONTRAST = 0.55
 # para que la gran mayoría del humo se mantenga por debajo de 200.
 _HOT_FLECK_PROB = 0.01
 _HOT_FLECK_RANGE = (200, 255)
+
+# Manchas sustractivas: polígonos que recortan huecos dentro del humo.
+#
+# _SMOKE_ERASE_COUNT_RANGE es cuántos por explosión; estaba en línea como
+# rng.integers(15, 45).
+#
+# _SMOKE_ERASE_DEPTH es qué fracción del brillo SOBREVIVE al recorte. 0.0 borra a
+# negro puro, que es lo que hacía hasta ahora; 1.0 desactiva el efecto. Se sacó a
+# constante porque borrar a negro tiene dos problemas contra el frame real: ahí la
+# pluma es continua y no tiene un solo hueco, y además el recorte limpia la
+# máscara (`mask_region[erase_mask] = 0`), o sea que mete fondo etiquetado en
+# medio del humo.
+# Barrido del 2026-08-17, cantidad x profundidad, semilla 7: la palanca que
+# decide es la PROFUNDIDAD, no la cantidad. Bajar la cantidad de 15-45 a 3-8
+# apenas cambia la lectura; dejar de borrar a negro sí. Por eso la cantidad se
+# queda como estaba —las manchas aportan el moteado interno que la pluma
+# necesita— y lo que cambia es que ahora atenúan en vez de perforar.
+_SMOKE_ERASE_COUNT_RANGE = (15, 45)
+_SMOKE_ERASE_DEPTH = 0.35
 
 # Blobs de humo blanco: sub-nubes de metralla/brasas incandescentes dentro del
 # humo, reutilizando draw_smoke (mismas zonas core/mid/outer/fringe + Perlin)
@@ -112,9 +204,171 @@ _WHITE_BLOB_SCALE_RANGE = (0.7, 1.0)  # análogo a brightness_scale, cercano a b
 _WHITE_BLOB_BRIGHTNESS_FLOOR = 130
 
 
+def _casco_convexo(puntos: np.ndarray) -> np.ndarray:
+    """Casco convexo por cadena monótona de Andrew. O(n log n), sin dependencias.
+
+    No se usa scipy.spatial.ConvexHull porque scipy no está instalado en este
+    entorno (verificado). Devuelve los vértices en orden, como (y, x).
+    """
+    pts = sorted({(float(p[0]), float(p[1])) for p in puntos})
+    if len(pts) <= 2:
+        return np.array(pts, dtype=np.float64)
+
+    def cruz(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    def media_cadena(seq):
+        out = []
+        for p in seq:
+            while len(out) >= 2 and cruz(out[-2], out[-1], p) <= 0:
+                out.pop()
+            out.append(p)
+        return out
+
+    inferior = media_cadena(pts)
+    superior = media_cadena(reversed(pts))
+    return np.array(inferior[:-1] + superior[:-1], dtype=np.float64)
+
+
+def _distancia_al_casco(casco: np.ndarray, ys, xs) -> np.ndarray:
+    """Distancia con signo de cada punto al borde del casco: positiva adentro.
+
+    Para un polígono convexo alcanza con la mínima distancia con signo a sus
+    semiplanos, sin necesidad de proyectar sobre cada segmento.
+    """
+    dist = np.full(np.shape(ys), np.inf, dtype=np.float64)
+    n = len(casco)
+    # el casco viene antihorario, así que el interior queda a la izquierda de
+    # cada arista; el signo se fija con el área para no depender de eso.
+    area = 0.0
+    for i in range(n):
+        ay, ax = casco[i]
+        by, bx = casco[(i + 1) % n]
+        area += ax * by - bx * ay
+    orientacion = 1.0 if area > 0 else -1.0
+
+    for i in range(n):
+        ay, ax = casco[i]
+        by, bx = casco[(i + 1) % n]
+        ey, ex = by - ay, bx - ax
+        largo = np.hypot(ey, ex)
+        if largo < 1e-9:
+            continue
+        # distancia con signo a la recta que contiene la arista
+        d = orientacion * ((ys - ay) * ex - (xs - ax) * ey) / largo
+        np.minimum(dist, d, out=dist)
+    return dist
+
+
+def _desenfocar(campo: np.ndarray, radio: float) -> np.ndarray:
+    """Desenfoque de caja sobre un campo float, por sumas acumuladas.
+
+    Se aplica dos veces (un kernel triangular) porque una sola pasada deja bordes
+    rectos visibles. No se usa ImageFilter.GaussianBlur de PIL porque no acepta
+    modo "F" y convertir a uint8 cuantizaría el campo justo donde importa, que es
+    en variaciones suaves de pocos por ciento.
+    """
+    r = int(max(1, round(radio / 2)))
+    k = 2 * r + 1
+    h, w = campo.shape
+    for _ in range(2):
+        p = np.pad(campo, r, mode="edge")
+        c = np.pad(np.cumsum(np.cumsum(p, axis=0), axis=1), ((1, 0), (1, 0)))
+        campo = (c[k:k + h, k:k + w] - c[0:h, k:k + w]
+                 - c[k:k + h, 0:w] + c[0:h, 0:w]) / (k * k)
+    return campo
+
+
 def sample_brightness_scale(rng: np.random.Generator) -> float:
     """Sortea la escala de brillo global de una explosión (una vez por imagen)."""
     return rng.uniform(*SMOKE_BRIGHTNESS_SCALE_RANGE)
+
+
+def _extras_del_humo(region, mask_region, region_h, region_w, smoke_radius,
+                     rng, distorted_dist, core_radius):
+    """Flecos brillantes y manchas sustractivas sobre el humo ya dibujado.
+
+    Estaba en línea dentro de draw_smoke; se sacó acá para que los dos modos de
+    render —zonas y aros— compartan el mismo código en vez de duplicarlo. Los dos
+    parámetros de distancia son lo único que dependía del modo: en zonas vienen
+    del campo distorsionado, en aros del campo normalizado sin distorsionar.
+    """
+    # smoke_so_far / smoke_mask deben restringirse al humo real (mask_region
+    # == 1), no a `region > 0`: la región de trabajo puede incluir textura de
+    # terreno (draw_terrain, dibujado antes con np.maximum) que no tiene
+    # nada que ver con el humo. Sin esta distinción, tanto los flecos como
+    # las manchas sustractivas de más abajo terminan operando sobre terreno
+    # ajeno al humo — los flecos lo salpican de chispas sin sentido y las
+    # manchas lo perforan a negro puro, rompiendo la continuidad de las
+    # líneas de terreno alrededor de la explosión. Si no hay mask, no hay
+    # forma de distinguir humo de terreno y se cae de vuelta a `region > 0`.
+    real_smoke_mask = mask_region == 1 if mask_region is not None else region > 0
+
+    # === FLECOS BRILLANTES (chispas raras cercanas a blanco pleno) ===
+    # Aplicado sobre el humo ya dibujado (todas las zonas), independiente de
+    # brightness_scale a propósito: es la única vía para que un píxel de
+    # humo llegue cerca de 255 aunque esta explosión haya salido "apagada".
+    fleck_roll = rng.random(region.shape)
+    fleck_mask = real_smoke_mask & (fleck_roll < _HOT_FLECK_PROB)
+    if fleck_mask.any():
+        fleck_brightness = rng.uniform(*_HOT_FLECK_RANGE, size=int(fleck_mask.sum())).astype(np.uint8)
+        region[fleck_mask] = np.maximum(region[fleck_mask], fleck_brightness)
+
+    # === MANCHAS SUSTRACTIVAS (polígonos que recortan huecos en el humo) ===
+    # Se generan en zonas donde el Perlin sustractivo es bajo (< 0.45),
+    # evitando el core central para no romper la forma base.
+    subtractive = perlin_noise_2d(
+        (region_h, region_w), scale=smoke_radius * 0.3, rng=rng, octaves=3
+    )
+    candidate_mask = (subtractive < 0.45) & real_smoke_mask
+    candidate_mask &= distorted_dist > core_radius * 0.5  # proteger el core
+
+    candidate_coords = np.argwhere(candidate_mask)
+    if len(candidate_coords) > 0:
+        num_polys = min(len(candidate_coords),
+                        rng.integers(*_SMOKE_ERASE_COUNT_RANGE))
+        seed_indices = rng.choice(len(candidate_coords), size=num_polys, replace=False)
+        seeds = candidate_coords[seed_indices]
+
+        # Dibujar polígonos en una imagen auxiliar para luego aplicar como máscara
+        poly_img = Image.new("L", (region_w, region_h), 0)
+        draw = ImageDraw.Draw(poly_img)
+
+        for seed in seeds:
+            sy, sx = seed
+            dist = distorted_dist[sy, sx]
+            # Polígonos más pequeños cerca del core, más grandes lejos
+            core_factor = float(np.clip(dist / (core_radius * 2), 0.2, 1.0))
+
+            # Polígono irregular: vértices a ángulos ordenados con radio variable
+            num_verts = rng.integers(4, 14)
+            angles = np.sort(rng.uniform(0, 2 * np.pi, size=num_verts))
+            base_r = smoke_radius * rng.uniform(0.1, 0.3) * core_factor
+
+            verts = []
+            for a in angles:
+                r = base_r * rng.uniform(0.6, 1.0)  # variación del radio por vértice
+                vy = sy + r * np.sin(a)
+                vx = sx + r * np.cos(a)
+                verts.append((int(round(vx)), int(round(vy))))
+
+            draw.polygon(verts, fill=255)
+
+        # Aplicar máscara: donde hay polígono Y es humo real, borrar. El
+        # polígono puede sobresalir un poco más allá de real_smoke_mask
+        # (el radio se sortea independiente de la forma del humo); sin este
+        # segundo filtro, ese sobrante perfora terreno vecino en vez de
+        # limitarse al humo.
+        poly_array = np.array(poly_img)
+        erase_mask = (poly_array > 0) & real_smoke_mask
+        # Atenuar, no necesariamente borrar: ver _SMOKE_ERASE_DEPTH. Con 0.0
+        # esto es exactamente lo de antes (el píxel queda en 0 y por lo tanto
+        # se le limpia la etiqueta); con un piso mayor el hueco conserva algo
+        # de tinta y sigue siendo humo, que es lo que muestra la referencia.
+        region[erase_mask] = np.rint(
+            region[erase_mask] * _SMOKE_ERASE_DEPTH).astype(np.uint8)
+        if mask_region is not None:
+            mask_region[erase_mask & (region == 0)] = 0
 
 
 def draw_smoke(
@@ -140,12 +394,18 @@ def draw_smoke(
     all_cy = np.array([c[0] for c in centers], dtype=np.float64)
     all_cx = np.array([c[1] for c in centers], dtype=np.float64)
 
-    # Región de trabajo: bounding box de todos los centros + margen del radio
+    # Región de trabajo: bounding box de todos los centros + margen del radio.
+    # En modo casco el margen tiene que cubrir lo que se aleja el casco de la
+    # línea (_SMOKE_HULL_ACROSS) más el radio del círculo que se plante ahí y su
+    # propia zona fringe; si queda corto, la pluma sale recortada por una recta.
     fringe_radius = smoke_radius * 1.3
-    min_y = max(0, int(all_cy.min() - fringe_radius - 10))
-    max_y = min(h, int(all_cy.max() + fringe_radius + 10))
-    min_x = max(0, int(all_cx.min() - fringe_radius - 10))
-    max_x = min(w, int(all_cx.max() + fringe_radius + 10))
+    margen = fringe_radius
+    if _SMOKE_SHAPE_MODE == "casco":
+        margen = smoke_radius * (_SMOKE_HULL_ACROSS[1] + _SMOKE_HULL_RADIUS[1] * 1.3)
+    min_y = max(0, int(all_cy.min() - margen - 10))
+    max_y = min(h, int(all_cy.max() + margen + 10))
+    min_x = max(0, int(all_cx.min() - margen - 10))
+    max_x = min(w, int(all_cx.max() + margen + 10))
 
     region_h = max_y - min_y
     region_w = max_x - min_x
@@ -173,31 +433,101 @@ def draw_smoke(
         fuente: máximo justo sobre su borde (d = 1) y cae a los lados."""
         return np.exp(-(((d - 1.0) / _SMOKE_RIM_WIDTH) ** 2))
 
+    # Las tres familias de fuentes —cuerpo, lóbulos del perímetro y micro-nubes
+    # internas— se arman primero en una sola lista y después se recorren juntas.
+    # Antes eran tres bucles separados; se unificaron para poder anotar QUÉ fuente
+    # gana en cada píxel (`owner`), que es lo que necesitan los modos de sombreado
+    # que siguen a la estructura de la nube en vez de pintarle ruido encima.
     line_radius = smoke_radius * _SMOKE_LINE_RADIUS_FRAC
-    normalized = np.full(ys.shape, np.inf)
-    for cy, cx in centers:
-        np.minimum(normalized, np.hypot(ys - cy, xs - cx) / line_radius, out=normalized)
-    rim = banda_de_borde(normalized)
 
-    # Lóbulos: se plantan sobre la línea de tiro y se desplazan de ella, para
-    # que la pluma siga naciendo de los pozos pero no quede simétrica respecto
-    # del eje.
-    #
-    # La silueta se acumula con MÍNIMO (la unión de los lóbulos) y el reborde con
+    if _SMOKE_SHAPE_MODE == "casco":
+        # 1. La ZONA: casco convexo de unos pocos puntos sorteados alrededor de
+        #    la línea de tiro. Pocos vértices a propósito — con muchos el casco
+        #    tiende a una elipse y se pierde el carácter.
+        ay, ax = all_cy[0], all_cx[0]
+        by, bx = all_cy[-1], all_cx[-1]
+        perp = np.arctan2(by - ay, bx - ax) + np.pi / 2
+
+        n_pts = int(rng.integers(*_SMOKE_HULL_POINTS, endpoint=True))
+        t = rng.uniform(*_SMOKE_HULL_ALONG, size=n_pts)
+        u = (rng.uniform(*_SMOKE_HULL_ACROSS, size=n_pts) * smoke_radius
+             * rng.choice([-1.0, 1.0], size=n_pts))
+        semillas = np.stack([ay + t * (by - ay) + u * np.sin(perp),
+                             ax + t * (bx - ax) + u * np.cos(perp)], axis=1)
+        casco = _casco_convexo(semillas)
+
+        # 2. Los CÍRCULOS: candidatos uniformes en la caja del casco, filtrados a
+        #    los que caen adentro. El radio sigue a la distancia al borde, así
+        #    que quedan grandes en el medio y chicos contra el contorno.
+        cy_lo, cy_hi = casco[:, 0].min(), casco[:, 0].max()
+        cx_lo, cx_hi = casco[:, 1].min(), casco[:, 1].max()
+        cand_y = rng.uniform(cy_lo, cy_hi, size=_SMOKE_HULL_CANDIDATES)
+        cand_x = rng.uniform(cx_lo, cx_hi, size=_SMOKE_HULL_CANDIDATES)
+        dentro = _distancia_al_casco(casco, cand_y, cand_x)
+        ok = dentro > 0
+        cand_y, cand_x, dentro = cand_y[ok], cand_x[ok], dentro[ok]
+
+        r_lo, r_hi = _SMOKE_HULL_RADIUS[0] * smoke_radius, _SMOKE_HULL_RADIUS[1] * smoke_radius
+        cand_r = np.clip(dentro, r_lo, r_hi)
+
+        # 3. El APILADO: de mayor a menor, aceptando un círculo solo si está lo
+        #    bastante separado de los ya puestos. Grandes primero es lo que hace
+        #    que los chicos terminen rellenando los intersticios, que es la
+        #    lectura de "apilados" y no de "sorteados".
+        orden = np.argsort(-cand_r)
+        sel_y, sel_x, sel_r = [], [], []
+        for i in orden:
+            py, px, pr = cand_y[i], cand_x[i], cand_r[i]
+            if sel_y:
+                d = np.hypot(np.array(sel_y) - py, np.array(sel_x) - px)
+                if np.any(d < _SMOKE_HULL_OVERLAP * (np.array(sel_r) + pr)):
+                    continue
+            sel_y.append(py); sel_x.append(px); sel_r.append(pr)
+
+        fuentes_y = np.array(sel_y)
+        fuentes_x = np.array(sel_x)
+        fuentes_r = np.array(sel_r)
+        if len(fuentes_y) == 0:      # casco degenerado: no dibujar nada
+            return
+    else:
+        # Cuerpo: la fila de pozos, todos con el mismo radio.
+        fuentes_y = list(all_cy)
+        fuentes_x = list(all_cx)
+        fuentes_r = [line_radius] * len(centers)
+
+        # Lóbulos del perímetro (ver _SMOKE_LOBE_RING) y micro-nubes internas
+        # (ver _SMOKE_MICRO_SPREAD).
+        for cuenta, radios, empujes in (
+            (_SMOKE_LOBE_COUNT, _SMOKE_LOBE_RADIUS, _SMOKE_LOBE_RING),
+            (_SMOKE_MICRO_COUNT, _SMOKE_MICRO_RADIUS, _SMOKE_MICRO_SPREAD),
+        ):
+            n = int(rng.integers(*cuenta, endpoint=True))
+            anchors = rng.integers(0, len(centers), size=n)
+            for anchor, frac, ang, push in zip(anchors,
+                                               rng.uniform(*radios, size=n),
+                                               rng.uniform(0, 2 * np.pi, size=n),
+                                               rng.uniform(*empujes, size=n)):
+                fuentes_y.append(all_cy[anchor] + np.sin(ang) * push * line_radius)
+                fuentes_x.append(all_cx[anchor] + np.cos(ang) * push * line_radius)
+                fuentes_r.append(frac * smoke_radius)
+
+        fuentes_y = np.array(fuentes_y)
+        fuentes_x = np.array(fuentes_x)
+        fuentes_r = np.array(fuentes_r)
+
+    # La silueta se acumula con MÍNIMO (la unión de las fuentes) y el reborde con
     # MÁXIMO: son dos operaciones distintas a propósito. Con el mínimo, el borde
     # de un lóbulo tapado por otro desaparece; con el máximo se enciende igual, y
-    # eso es lo que dibuja las cabezas de adentro de la coliflor.
-    n_lobes = int(rng.integers(*_SMOKE_LOBE_COUNT, endpoint=True))
-    anchors = rng.integers(0, len(centers), size=n_lobes)
-    for anchor, frac, ang, push in zip(anchors,
-                                       rng.uniform(*_SMOKE_LOBE_RADIUS, size=n_lobes),
-                                       rng.uniform(0, 2 * np.pi, size=n_lobes),
-                                       rng.uniform(*_SMOKE_LOBE_OFFSET, size=n_lobes)):
-        ly = all_cy[anchor] + np.sin(ang) * push * smoke_radius
-        lx = all_cx[anchor] + np.cos(ang) * push * smoke_radius
-        d_lobe = np.hypot(ys - ly, xs - lx) / (frac * smoke_radius)
-        np.minimum(normalized, d_lobe, out=normalized)
-        np.maximum(rim, banda_de_borde(d_lobe), out=rim)
+    # eso es lo que dibuja las cabezas de adentro de la nube.
+    normalized = np.full(ys.shape, np.inf)
+    owner = np.zeros(ys.shape, dtype=np.int32)
+    rim = np.zeros(ys.shape)
+    for i in range(len(fuentes_y)):
+        d = np.hypot(ys - fuentes_y[i], xs - fuentes_x[i]) / fuentes_r[i]
+        gana = d < normalized
+        normalized[gana] = d[gana]
+        owner[gana] = i
+        np.maximum(rim, banda_de_borde(d), out=rim)
 
     min_dist = normalized * smoke_radius
     shading = (1.0 - _SMOKE_RIM_CONTRAST) + _SMOKE_RIM_CONTRAST * rim
@@ -217,10 +547,110 @@ def draw_smoke(
     # El sombreado por reborde entra acá, multiplicado junto con el grano, para
     # que llegue a TODAS las zonas (core, seam, mid, outer) sin repetirlo cuatro
     # veces. Ver _SMOKE_RIM_CONTRAST.
-    grain_factor = (0.55 + 0.45 * grain) * shading
+    # Sombreado interno. Ver _SMOKE_SHADE_MODE para qué hace cada modo y por qué.
+    # Los sorteos se hacen SIEMPRE, en el mismo orden y sin importar el modo, para
+    # que cambiar de modo no desplace el stream del rng y las semillas sigan
+    # siendo comparables entre modos.
+    amp = _SMOKE_SHADE_AMPLITUDE
+    luz = rng.uniform(0, 2 * np.pi)
+    factor_cuerpo = rng.uniform(1.0 - amp, 1.0 + amp)
+    factor_fuente = rng.uniform(1.0 - amp, 1.0 + amp, size=len(fuentes_y))
+    # El cuerpo es UN objeto, no 40-80: sus pozos comparten factor. Si cada uno
+    # llevara el suyo, la pluma quedaría con un damero a lo largo de la línea.
+    factor_fuente[:len(centers)] = factor_cuerpo
 
-    # Distorsión del radio: el Perlin desplaza el borde ±30%, creando irregularidad
-    radius_distortion = 1.0 + (perlin - 0.5) * 0.6
+    if _SMOKE_SHADE_MODE == "perlin":
+        shade = perlin_noise_2d((region_h, region_w),
+                                scale=smoke_radius * _SMOKE_SHADE_SCALE,
+                                rng=rng, octaves=2)
+        volumen = (1.0 - amp) + amp * shade
+    elif _SMOKE_SHADE_MODE == "por_fuente":
+        volumen = factor_fuente[owner]
+    elif _SMOKE_SHADE_MODE == "direccional":
+        # Cada fuente iluminada desde un mismo lado: el píxel se aclara según
+        # cuánto se corre del centro de SU fuente hacia la luz. La media queda en
+        # 1.0, así que no oscurece la pluma como el perlin.
+        dy = (ys - fuentes_y[owner]) / fuentes_r[owner]
+        dx = (xs - fuentes_x[owner]) / fuentes_r[owner]
+        proy = np.clip(dy * np.sin(luz) + dx * np.cos(luz), -1.0, 1.0)
+        volumen = 1.0 + amp * proy
+    else:
+        volumen = np.ones(ys.shape)
+
+    # Los modos que dependen de `owner` cambian de golpe en la frontera entre
+    # fuentes vecinas, que se vería como facetas. El desenfoque las funde.
+    if _SMOKE_SHADE_MODE in ("por_fuente", "direccional"):
+        volumen = _desenfocar(volumen, max(1.0, smoke_radius * _SMOKE_SHADE_BLUR))
+
+    grain_factor = (0.55 + 0.45 * grain) * shading * volumen
+
+    if _SMOKE_RENDER_MODE == "aros":
+        # === MODO ARO ===
+        # Cada círculo del apilado se estampa como un ANILLO, no como un disco.
+        #
+        # Por qué: un canal del dataset es un absdiff, y en el heatmap real
+        # (video_diff_heatmap_blocks_outputs/) la pluma se ve como un racimo de
+        # arcos brillantes con el interior oscuro — el interior de un bulto casi
+        # no cambia entre frames, su borde en avance sí. Ver 20_real_heatmap_zoom.
+        #
+        # No se deriva del campo de distancias como hacía _SMOKE_RIM_CONTRAST: ahí
+        # el anillo salía perforado, porque después pasaba por las cuatro zonas
+        # probabilísticas (mid 90->50%, outer 60->0%, fringe 15%) que están
+        # pensadas para difuminar el borde de una nube RELLENA. Estampar directo
+        # evita ese filtro y de paso hace innecesarias las zonas, el reborde
+        # derivado y el sombreado.
+        tinta = np.zeros((region_h, region_w), dtype=np.float64)
+        n = len(fuentes_y)
+        picos = rng.uniform(*_SMOKE_RING_BRIGHTNESS, size=n)
+        # Ondulación por armónicas: sin esto son circunferencias perfectas y se
+        # lee como un dibujo técnico. Tres armónicas alcanzan para que el arco
+        # tenga carácter sin dejar de cerrar.
+        amp = rng.uniform(*_SMOKE_RING_WOBBLE, size=(n, 3))
+        fase = rng.uniform(0, 2 * np.pi, size=(n, 3))
+
+        for i in range(n):
+            dy = ys - fuentes_y[i]
+            dx = xs - fuentes_x[i]
+            d = np.hypot(dy, dx)
+            # solo importa la corona: fuera de ella la gaussiana ya es ~0
+            cerca = d < fuentes_r[i] * 2.0
+            if not cerca.any():
+                continue
+            ang = np.arctan2(dy, dx)
+            radio = fuentes_r[i] * (1.0
+                                    + amp[i, 0] * np.cos(ang + fase[i, 0])
+                                    + amp[i, 1] * np.cos(2 * ang + fase[i, 1])
+                                    + amp[i, 2] * np.cos(3 * ang + fase[i, 2]))
+            banda = np.exp(-(((d - radio) / (_SMOKE_RING_WIDTH * fuentes_r[i])) ** 2))
+            # Un piso tenue adentro del aro: el heatmap real tampoco es hueco del
+            # todo, tiene textura fina en el interior del bulto.
+            aporte = picos[i] * np.maximum(banda, _SMOKE_RING_FILL * (d < radio))
+            np.maximum(tinta, aporte, out=tinta)
+
+        # La MÁSCARA sale de la tinta, no de la zona ocupada. Es la diferencia
+        # que hace que este modo no repita el problema de etiqueta sin evidencia:
+        # con aros finos, marcar el bulto entero dejaba el 63% de los píxeles de
+        # clase humo prácticamente en negro. El umbral se aplica ANTES de
+        # brightness_scale, igual que _FILAMENT_MASK_LEVEL, para que la máscara no
+        # se mueva si la explosión sale más clara o más apagada.
+        dibujado = tinta > _SMOKE_RING_MASK_LEVEL
+        brillo = np.clip(tinta * (0.55 + 0.45 * grain) * brightness_scale,
+                         0, 255)
+        brillo = np.where(dibujado, np.maximum(brillo, brightness_floor), 0)
+        np.maximum(region, brillo.astype(np.uint8), out=region)
+        if mask_region is not None:
+            mask_region[dibujado] = 1
+
+        if include_extras:
+            # En aros no hay `core` que proteger ni campo distorsionado: se le
+            # pasa el campo normalizado, que mide lo mismo en unidades del
+            # radio de cada círculo.
+            _extras_del_humo(region, mask_region, region_h, region_w,
+                             smoke_radius, rng, min_dist, smoke_radius * 0.25)
+        return
+
+    # Distorsión del radio: el Perlin desplaza el borde, creando irregularidad
+    radius_distortion = 1.0 + (perlin - 0.5) * _SMOKE_EDGE_NOISE
     distorted_dist = min_dist / radius_distortion
 
     # === ZONA CORE (0 a 25% del radio) ===
@@ -311,76 +741,8 @@ def draw_smoke(
         mask_region[fringe_indices[fringe_drawn, 0], fringe_indices[fringe_drawn, 1]] = 1
 
     if include_extras:
-        # smoke_so_far / smoke_mask deben restringirse al humo real (mask_region
-        # == 1), no a `region > 0`: la región de trabajo puede incluir textura de
-        # terreno (draw_terrain, dibujado antes con np.maximum) que no tiene
-        # nada que ver con el humo. Sin esta distinción, tanto los flecos como
-        # las manchas sustractivas de más abajo terminan operando sobre terreno
-        # ajeno al humo — los flecos lo salpican de chispas sin sentido y las
-        # manchas lo perforan a negro puro, rompiendo la continuidad de las
-        # líneas de terreno alrededor de la explosión. Si no hay mask, no hay
-        # forma de distinguir humo de terreno y se cae de vuelta a `region > 0`.
-        real_smoke_mask = mask_region == 1 if mask_region is not None else region > 0
-
-        # === FLECOS BRILLANTES (chispas raras cercanas a blanco pleno) ===
-        # Aplicado sobre el humo ya dibujado (todas las zonas), independiente de
-        # brightness_scale a propósito: es la única vía para que un píxel de
-        # humo llegue cerca de 255 aunque esta explosión haya salido "apagada".
-        fleck_roll = rng.random(region.shape)
-        fleck_mask = real_smoke_mask & (fleck_roll < _HOT_FLECK_PROB)
-        if fleck_mask.any():
-            fleck_brightness = rng.uniform(*_HOT_FLECK_RANGE, size=int(fleck_mask.sum())).astype(np.uint8)
-            region[fleck_mask] = np.maximum(region[fleck_mask], fleck_brightness)
-
-        # === MANCHAS SUSTRACTIVAS (polígonos que recortan huecos en el humo) ===
-        # Se generan en zonas donde el Perlin sustractivo es bajo (< 0.45),
-        # evitando el core central para no romper la forma base.
-        subtractive = perlin_noise_2d(
-            (region_h, region_w), scale=smoke_radius * 0.3, rng=rng, octaves=3
-        )
-        candidate_mask = (subtractive < 0.45) & real_smoke_mask
-        candidate_mask &= distorted_dist > core_radius * 0.5  # proteger el core
-
-        candidate_coords = np.argwhere(candidate_mask)
-        if len(candidate_coords) > 0:
-            num_polys = min(len(candidate_coords), rng.integers(15, 45))
-            seed_indices = rng.choice(len(candidate_coords), size=num_polys, replace=False)
-            seeds = candidate_coords[seed_indices]
-
-            # Dibujar polígonos en una imagen auxiliar para luego aplicar como máscara
-            poly_img = Image.new("L", (region_w, region_h), 0)
-            draw = ImageDraw.Draw(poly_img)
-
-            for seed in seeds:
-                sy, sx = seed
-                dist = distorted_dist[sy, sx]
-                # Polígonos más pequeños cerca del core, más grandes lejos
-                core_factor = float(np.clip(dist / (core_radius * 2), 0.2, 1.0))
-
-                # Polígono irregular: vértices a ángulos ordenados con radio variable
-                num_verts = rng.integers(4, 14)
-                angles = np.sort(rng.uniform(0, 2 * np.pi, size=num_verts))
-                base_r = smoke_radius * rng.uniform(0.1, 0.3) * core_factor
-
-                verts = []
-                for a in angles:
-                    r = base_r * rng.uniform(0.6, 1.0)  # variación del radio por vértice
-                    vy = sy + r * np.sin(a)
-                    vx = sx + r * np.cos(a)
-                    verts.append((int(round(vx)), int(round(vy))))
-
-                draw.polygon(verts, fill=255)
-
-            # Aplicar máscara: donde hay polígono Y es humo real, borrar. El
-            # polígono puede sobresalir un poco más allá de real_smoke_mask
-            # (el radio se sortea independiente de la forma del humo); sin este
-            # segundo filtro, ese sobrante perfora terreno vecino en vez de
-            # limitarse al humo.
-            poly_array = np.array(poly_img)
-            erase_mask = (poly_array > 0) & real_smoke_mask
-            region[erase_mask] = 0
-            if mask_region is not None:
-                mask_region[erase_mask] = 0
+        _extras_del_humo(region, mask_region, region_h, region_w,
+                         smoke_radius, rng, distorted_dist, core_radius)
 
 
 # ── Filamentos radiales ────────────────────────────────────────────────────
@@ -394,7 +756,30 @@ def draw_smoke(
 # Se dibujan DESPUÉS de draw_smoke a propósito: sus manchas sustractivas operan
 # sobre `mask_region == 1`, así que si los filamentos ya estuvieran marcados,
 # los perforaría también.
-_FILAMENT_COUNT_RANGE  = (1400, 3200)
+# CANTIDAD, bajada al 10% (era 1400-3200) el 2026-08-17.
+#
+# Medido sobre 4 semillas del pipeline completo, entre el 40% y el 87% de la
+# clase humo la ponían los filamentos y no draw_smoke: la pluma ERA las estrías,
+# y cualquier ajuste de la silueta quedaba enterrado debajo. Contra el frame real
+# que trajo el equipo —una masa blanda y compacta, con bultos redondos y sin una
+# sola estría visible— eso se leía como diente de león.
+#
+# Barrido de supresión, con el cuerpo ya en 1.20: 100% erizo, 33% peluda, 10%
+# nube con un espolvoreo de estrías, 0% nube limpia. Se eligió 10% y no 0 para
+# conservar algo de la textura fibrosa, que es con lo que se entrenó v18 (el
+# mejor resultado hasta la fecha) — si la pérdida de fibra resulta costar
+# precisión, el camino de vuelta es este número y no la forma.
+#
+# Se toca SOLO la cantidad a propósito. El largo, el ancho (_FILAMENT_WIDTH_PX,
+# elegido con coherencia de orientación y pendiente espectral sobre 30 semillas)
+# y el curl describen cómo es UNA estría y siguen valiendo; lo que estaba mal era
+# cuántas había.
+#
+# CONSECUENCIA a vigilar: draw_smoke_filaments devuelve `filament_region`, que
+# trajectories.py usa para decidir qué trayectoria se ve sobre la pluma y cuál
+# queda oculta (_SMOKE_OVERRIDE_PROB). Con 10x menos estrías esa periferia se
+# achica, así que más trayectorias caen en el núcleo y quedan ocultas.
+_FILAMENT_COUNT_RANGE  = (140, 320)
 # Arranque de la estría, en fracción de smoke_radius: NO puede ser 0. Si todas
 # salen desde la línea misma, la densidad se apila ahí y el núcleo revienta a
 # blanco puro, tapando toda la estructura. Repartir los arranques sobre un
