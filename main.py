@@ -44,6 +44,15 @@ HEIGHT = 512                                 # alto del lienzo, en px
 WIDTH = 768                                  # ancho del lienzo, en px
 DRAW_LANDSLIDES = False                      # clase 3 desactivada por ahora
 
+# Cuántas trayectorias de cada tipo por explosión (mín, máx+1). Es la palanca
+# principal sobre el peso de la clase trayectoria, y no pesan igual: un LAZO deja
+# un recorrido de p50 1080 px contra 264 de una recta, porque traza la elipse
+# completa. Con estos valores la clase llega al 15.3% del cuadro contra 3.3% del
+# humo, y el 85% de sus píxeles queda bajo 20 en la entrada.
+NUM_STRAIGHT_RANGE = (15, 30)                # trayectorias rectas
+NUM_PARABOLIC_RANGE = (15, 30)               # lazos que vuelven al origen
+NUM_FLYOVER_RANGE = (1, 4)                   # arcos de sobrevuelo
+
 
 def generate_explosion(
     height: int,
@@ -148,9 +157,9 @@ def generate_explosion(
 
     # Trayectorias de metralla (rectas + parabólicas de ida y vuelta + arcos
     # de sobrevuelo, fragmentos grandes que vuelan por encima de la nube)
-    num_straight = rng.integers(15, 30)
-    num_parabolic = rng.integers(15, 30)
-    num_flyover = rng.integers(1, 4)
+    num_straight = rng.integers(*NUM_STRAIGHT_RANGE)
+    num_parabolic = rng.integers(*NUM_PARABOLIC_RANGE)
+    num_flyover = rng.integers(*NUM_FLYOVER_RANGE)
     draw_trajectories(tensor, centers, origin, num_straight, num_parabolic, rng, mask, heatmap, num_flyover,
                        camouflage_scale=brightness_scale, filament_region=filament_region,
                        progress_map=progress_map, progress_schedule=progress_schedule)
