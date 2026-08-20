@@ -174,16 +174,23 @@ SMOKE_ARRIVAL_PROFILE = (0.21, 0.38, 0.24, 0.09, 0.05, 0.02, 0.01)  # reparto de
 
 # Turbulencia: un píxel de humo ya llegado vuelve a encenderse cada tanto, porque
 # la nube real no se apaga después de llegar — sigue revolviéndose, y eso es lo que
-# hace que EXISTA dentro de un bloque. No falta nube, falta que se encienda.
+# hace que EXISTA dentro de un bloque.
 #
-# Calibrado contra los diffs frame a frame de Video 3, donde la pluma está entera en
-# los 9 frames del bloque: objetivo >60 0.180% del cuadro y >80 0.066%. Con 0.14
-# daba 0.016% y 0.007%, o sea que el frente pasaba y no dejaba nada atrás. El p99
-# queda fuera del criterio — un frame real pre-ignición ya da 37, lo fija el terreno.
+# El dato que fija el diseño: nuestra máscara de humo cubre 1-2.6% del cuadro en un
+# bloque, y el real enciende 32-55% de sus píxeles por encima de 25. No falta nube,
+# falta que se encienda. Y se enciende a RÁFAGAS y no con un rumor parejo: la
+# actividad media por canal es baja pero el pico es alto, o sea intermitencia, por
+# eso _PROB es del orden de 1/9 y la amplitud alta.
+#
+# OJO al recalibrar: las referencias de detovision_segmentation tienen ganancia x10
+# con saturación en 255. Las crudas están en Desktop/video_diff_heatmap_blocks_outputs
+# y son las que valen — un bloque real da >10 0.13%, >25 0.012%, p99 5, y contra las
+# amplificadas se concluye lo contrario. Subir esta constante a 0.60 contra la fuente
+# amplificada nos dejó 16-100x más brillantes que el dominio real.
 #
 # El campo de ráfagas es POR MANCHAS y se resortea en cada frame: fijo estaría
 # igual en los 9 canales y volvería el problema del terreno estático.
-SMOKE_TURBULENCE_PROB = 0.60                 # fracción de nube que se reenciende por frame
+SMOKE_TURBULENCE_PROB = 0.14                 # fracción de nube que se reenciende por frame
 SMOKE_TURBULENCE_AMPLITUDE = (0.35, 1.0)     # con qué fuerza, en fracción de su valor
 SMOKE_TURBULENCE_CELL = 16                   # tamaño de la mancha de ráfaga, en px
 

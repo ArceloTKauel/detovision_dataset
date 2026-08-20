@@ -11,9 +11,10 @@ orgánicas de puntos en vez de puntos solitarios equidistantes. Cada
 trayectoria sortea también un ancho (1, 2 o 3 píxeles; ver
 _sample_trajectory_width) que se aplica a todos sus puntos.
 
-Todas las funciones aceptan un parámetro opcional mask: si se pasa, dibuja
-las trayectorias completas (todos los píxeles, sin spacing ni ráfagas) como
-clase 2, sobre píxeles de fondo (clase 0). La prioridad de clases en la
+Todas las funciones aceptan un parámetro opcional mask: si se pasa, marca clase 2
+sobre píxeles de fondo (clase 0) en los puntos donde el trazo dejó TINTA, no a lo
+largo del recorrido entero. Marcarlo entero dejaba el 85% de la clase sin nada
+visible en la entrada. La prioridad de clases en la
 máscara es humo > trayectoria > derrumbe > fondo, con una excepción: sobre la
 periferia FILAMENTOSA del humo (`filament_region`, ver _SMOKE_OVERRIDE_PROB) la
 trayectoria pasa por encima y gana la etiqueta, que es como se ven los "pelos"
@@ -505,7 +506,7 @@ def draw_trajectory(
     burst_remaining = 0
     erase_remaining = 0
     grace_remaining = 0
-    pixels_drawn = 0
+    inked = []
     max_spacing = 50
     max_dist = length if length > 0 else 1
     prog_lo, prog_hi = _progress_window(progress_launch, progress_duration)
@@ -517,7 +518,7 @@ def draw_trajectory(
 
         if _paint_over_filaments(tensor, py, px, rng, brightness_mean, mask,
                                   camouflage_scale, override_contrast, filament_region):
-            pixels_drawn += 1
+            inked.append((py, px))
             continue
 
         if erase_remaining > 0:
@@ -536,7 +537,7 @@ def draw_trajectory(
                     brightness = _trajectory_brightness(rng, brightness_mean)
                     _paint_trajectory_pixel(tensor, py, px, brightness, width, mask, camouflage_scale,
                                             override_contrast, filament_region)
-                    pixels_drawn += 1
+                    inked.append((py, px))
             burst_remaining -= 1
             continue
 
@@ -551,7 +552,7 @@ def draw_trajectory(
                     brightness = _trajectory_brightness(rng, brightness_mean)
                     _paint_trajectory_pixel(tensor, py, px, brightness, width, mask, camouflage_scale,
                                             override_contrast, filament_region)
-                    pixels_drawn += 1
+                    inked.append((py, px))
 
                 # Iniciar ráfaga de 1-3 píxeles consecutivos
                 burst_remaining = rng.integers(0, 3)
@@ -565,17 +566,17 @@ def draw_trajectory(
         else:
             pixels_since_draw += 1
 
-    # Mask: solo si la trayectoria tiene al menos un píxel visible en el tensor
-    if mask is not None and pixels_drawn > 0:
-        for py, px in points:
-            if 0 <= py < h and 0 <= px < w:
-                _paint_traj_mask(mask, py, px, h, w, over_smoke, filament_region)
+    # Etiqueta: solo donde cayó tinta, con el footprint de siempre (máscara de
+    # 2 px, gaussiano 3x3). Marcarla sobre el recorrido entero dejaba el 85% de la
+    # clase sin nada visible, y en un frame de secuencia el 43% de las colas salía
+    # 100% vacía.
+    if mask is not None:
+        for py, px in inked:
+            _paint_traj_mask(mask, py, px, h, w, over_smoke, filament_region)
 
-    # Heatmap: gradiente continuo sobre toda la línea (no solo los puntos dispersos)
-    if heatmap is not None and pixels_drawn > 0:
-        for py, px in points:
-            if 0 <= py < h and 0 <= px < w:
-                _stamp_heatmap(heatmap, py, px, mask)
+    if heatmap is not None:
+        for py, px in inked:
+            _stamp_heatmap(heatmap, py, px, mask)
 
 
 def _ellipse_visible_fraction(
@@ -683,8 +684,7 @@ def draw_returning_parabola(
     burst_remaining = 0
     erase_remaining = 0
     grace_remaining = 0
-    pixels_drawn = 0
-    all_points = []
+    inked = []
 
     max_dist = 2 * a if a > 0 else 1  # distancia del punto más lejano del lazo a `start`
     prog_lo, prog_hi = _progress_window(progress_launch, progress_duration)
@@ -704,15 +704,13 @@ def draw_returning_parabola(
             segment = [(py, px)]
 
         for spy, spx in segment:
-            all_points.append((spy, spx))
-
             if progress_map is not None:
                 _stamp_progress(progress_map, spy, spx,
                                 prog_lo + (prog_hi - prog_lo) * progress)
 
             if _paint_over_filaments(tensor, spy, spx, rng, brightness_mean, mask,
                                       camouflage_scale, override_contrast, filament_region):
-                pixels_drawn += 1
+                inked.append((spy, spx))
                 continue
 
             if erase_remaining > 0:
@@ -730,7 +728,7 @@ def draw_returning_parabola(
                         brightness = _trajectory_brightness(rng, brightness_mean)
                         _paint_trajectory_pixel(tensor, spy, spx, brightness, width, mask, camouflage_scale,
                                                 override_contrast, filament_region)
-                        pixels_drawn += 1
+                        inked.append((spy, spx))
                 burst_remaining -= 1
                 continue
 
@@ -745,7 +743,7 @@ def draw_returning_parabola(
                         brightness = _trajectory_brightness(rng, brightness_mean)
                         _paint_trajectory_pixel(tensor, spy, spx, brightness, width, mask, camouflage_scale,
                                                 override_contrast, filament_region)
-                        pixels_drawn += 1
+                        inked.append((spy, spx))
 
                     burst_remaining = rng.integers(0, 3)
 
@@ -763,17 +761,14 @@ def draw_returning_parabola(
 
         prev_py, prev_px = py, px
 
-    # Mask: solo si la trayectoria tiene al menos un píxel visible en el tensor
-    if mask is not None and pixels_drawn > 0:
-        for spy, spx in all_points:
-            if 0 <= spy < h and 0 <= spx < w:
-                _paint_traj_mask(mask, spy, spx, h, w, over_smoke, filament_region)
+    # Etiqueta: solo donde cayó tinta (ver draw_trajectory).
+    if mask is not None:
+        for spy, spx in inked:
+            _paint_traj_mask(mask, spy, spx, h, w, over_smoke, filament_region)
 
-    # Heatmap: gradiente continuo sobre todo el lazo (no solo los puntos dispersos)
-    if heatmap is not None and pixels_drawn > 0:
-        for spy, spx in all_points:
-            if 0 <= spy < h and 0 <= spx < w:
-                _stamp_heatmap(heatmap, spy, spx, mask)
+    if heatmap is not None:
+        for spy, spx in inked:
+            _stamp_heatmap(heatmap, spy, spx, mask)
 
 
 def draw_flyover_trajectory(
@@ -856,8 +851,7 @@ def draw_flyover_trajectory(
     burst_remaining = 0
     erase_remaining = 0
     grace_remaining = 0
-    pixels_drawn = 0
-    all_points = []
+    inked = []
     prog_lo, prog_hi = _progress_window(progress_launch, progress_duration)
 
     for i in range(num_steps + 1):
@@ -875,15 +869,13 @@ def draw_flyover_trajectory(
             segment = [(py, px)]
 
         for spy, spx in segment:
-            all_points.append((spy, spx))
-
             if progress_map is not None:
                 _stamp_progress(progress_map, spy, spx,
                                 prog_lo + (prog_hi - prog_lo) * progress)
 
             if _paint_over_filaments(tensor, spy, spx, rng, brightness_mean, mask,
                                       camouflage_scale, override_contrast, filament_region):
-                pixels_drawn += 1
+                inked.append((spy, spx))
                 continue
 
             if erase_remaining > 0:
@@ -901,7 +893,7 @@ def draw_flyover_trajectory(
                         brightness = _trajectory_brightness(rng, brightness_mean)
                         _paint_trajectory_pixel(tensor, spy, spx, brightness, width, mask, camouflage_scale,
                                                 override_contrast, filament_region)
-                        pixels_drawn += 1
+                        inked.append((spy, spx))
                 burst_remaining -= 1
                 continue
 
@@ -916,7 +908,7 @@ def draw_flyover_trajectory(
                         brightness = _trajectory_brightness(rng, brightness_mean)
                         _paint_trajectory_pixel(tensor, spy, spx, brightness, width, mask, camouflage_scale,
                                                 override_contrast, filament_region)
-                        pixels_drawn += 1
+                        inked.append((spy, spx))
 
                     burst_remaining = rng.integers(0, 3)
 
@@ -933,15 +925,14 @@ def draw_flyover_trajectory(
 
         prev_py, prev_px = py, px
 
-    if mask is not None and pixels_drawn > 0:
-        for spy, spx in all_points:
-            if 0 <= spy < h and 0 <= spx < w:
-                _paint_traj_mask(mask, spy, spx, h, w, over_smoke, filament_region)
+    # Etiqueta: solo donde cayó tinta (ver draw_trajectory).
+    if mask is not None:
+        for spy, spx in inked:
+            _paint_traj_mask(mask, spy, spx, h, w, over_smoke, filament_region)
 
-    if heatmap is not None and pixels_drawn > 0:
-        for spy, spx in all_points:
-            if 0 <= spy < h and 0 <= spx < w:
-                _stamp_heatmap(heatmap, spy, spx, mask)
+    if heatmap is not None:
+        for spy, spx in inked:
+            _stamp_heatmap(heatmap, spy, spx, mask)
 
 
 def draw_straight_trajectories(
