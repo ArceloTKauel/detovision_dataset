@@ -1,46 +1,26 @@
 """
 terrain.py - Manchón de parallax de terreno (ego-motion de cámara).
 
-Simula la textura de fondo que aparece en video real por el movimiento de la
-cámara sobre el relieve del terreno al diferenciar frames consecutivos (ver
-inference/inputs/mascara_cambios_final_sinbin_*.png en detovision_segmentation,
-donde el modelo la confundía con la clase trayectoria). Es un gradiente
-CONTINUO de todo el cuadro, no una forma discreta como el humo o los centros.
+La textura de fondo que aparece en video real al diferenciar frames consecutivos,
+por el movimiento de la cámara sobre el relieve. El modelo la confundía con la
+clase trayectoria (ver mascara_cambios_final_sinbin_*.png en el repo hermano). Es
+un gradiente CONTINUO de todo el cuadro, no una forma discreta como el humo.
 
-Se dibuja PRIMERO en el pipeline (antes de draw_center/draw_smoke/
-draw_trajectories, ver main.py::generate_explosion) para que el resto de los
-elementos lo ocluyan de forma natural vía la composición np.maximum ya
-existente en canvas.py/smoke.py, sin necesitar ninguna lógica de exclusión
-propia. Por eso draw_terrain no recibe (ni toca) `mask`: donde humo/
-trayectoria/derrumbe efectivamente cubren un píxel, sus propias funciones ya
-marcan esa clase en la máscara sin mirar el tensor de fondo (ver
-smoke.py::draw_smoke, que marca mask_region según su propia geometría,
-independiente del valor previo del tensor) — el terreno solo "gana" la
-etiqueta de fondo en las zonas que ningún otro elemento cubre, que es
-exactamente lo deseado (es un artefacto, no un objeto real a segmentar).
+Se dibuja primero y no toca `mask`: queda como fondo salvo donde otro elemento lo
+cubra, que es lo correcto — es un artefacto de cámara, no un objeto a segmentar.
 
-Prototipo y validación original en detovision_segmentation
-(scripts/preview_terrain_lines.py y la familia FAKE_TERRAIN_* de utils/dataset.py,
-que sigue activa ahí como augmentation por época). Esta es la misma técnica
-horneada en la generación base, fija por imagen; ambas capas conviven.
-
-Funciones:
-    - draw_terrain(tensor, rng, prob): Sortea si esta imagen lleva manchón de
-      terreno y, si corresponde, lo dibuja sobre el tensor.
+Misma técnica que la familia FAKE_TERRAIN_* de detovision_segmentation, que allá
+sigue activa como augmentation por época; acá está horneada en la generación y
+fija por imagen. Las dos capas conviven.
 """
 
 import numpy as np
 from PIL import Image, ImageFilter
 
-# Probabilidad de que una imagen lleve manchón de terreno; acá la decisión queda
-# fija para esa imagen, a diferencia de FAKE_TERRAIN_PROB en el repo hermano, que
-# se resortea por época.
-#
-# Pasó de 0.5 a 1.0 con el dataset temporal: una explosión sin terreno producía
-# frames pre-ignición sin absolutamente nada — el 23% de los frames salía negro y
-# el 56% de las secuencias tenía alguno. En las siete referencias el terreno llena
-# el cuadro desde el primer frame (p50 entre 7 y 10), así que un frame vacío no es
-# un caso difícil sino una entrada sin información.
+# Pasó de 0.5 a 1.0 con el dataset temporal: sin terreno, el 23% de los frames
+# pre-ignición salía negro y el 56% de las secuencias tenía alguno. En las siete
+# referencias el terreno llena el cuadro desde el primer frame (p50 entre 7 y 10),
+# así que un frame vacío no es un caso difícil sino una entrada sin información.
 TERRAIN_PROB = 1.0                           # probabilidad de que la imagen lleve terreno
 
 # ── Campo de "elevación" (dirección/curvatura del parallax) ────────────────
@@ -54,23 +34,19 @@ TERRAIN_BAND_PERIOD   = (0.04, 0.12)         # período de las bandas, en fracci
 TERRAIN_BLOTCH_MAX_VAL = (15, 55)            # brillo máximo del manchón, antes de intensity
 TERRAIN_BLUR_RADIUS   = (0.3, 0.8)           # suavizado final, en px
 
-# Piso de la banda (fracción del período que queda "apagada"): en vez de un
-# escalar único por imagen, se modula con un campo de baja frecuencia para
-# que convivan zonas de banda ancha (floor bajo) y zonas de banda fina (floor
-# alto) dentro del mismo cuadro, sin cambiar la forma/espaciado de las ondas.
+# Fracción del período que queda apagada. No es un escalar por imagen sino un
+# campo de baja frecuencia, para que convivan zonas de banda ancha (piso bajo) y
+# fina (piso alto) en el mismo cuadro sin tocar la forma ni el espaciado.
 #
-# El rango está calibrado contra las máscaras reales: medido como p95 de 2*EDT
-# sobre los píxeles encendidos y a 768x512 (el tamaño que ve el modelo), las
-# referencias dan ~19 px de ancho de línea. Con (0.35, 0.90) salían 27.5 px,
-# ~1.4x más anchas; este rango las deja en 19.5 px. Es el lever correcto para
-# afinar porque no toca el período, o sea que la forma y el espaciado de las
-# ondas quedan igual.
+# Calibrado contra las máscaras reales: medido como p95 de 2*EDT sobre los píxeles
+# encendidos a 768x512, las referencias dan ~19 px de ancho de línea. Con
+# (0.35, 0.90) salían 27.5 px; este rango las deja en 19.5. Es el lever correcto
+# para afinar el ancho porque no toca el período.
 TERRAIN_BLOTCH_FLOOR_RANGE     = (0.65, 0.96)  # piso de banda: alto = línea fina
 TERRAIN_FLOOR_FIELD_OCTAVES    = (2, 3)      # campo que modula ese piso
 TERRAIN_FLOOR_FIELD_CELL_RANGE = (150.0, 320.0)  # su tamaño de celda, en px
-# Veces que se aplica smoothstep al campo: empuja los valores hacia los
-# extremos (zona fina / zona ancha bien diferenciadas) manteniendo la
-# transición suave entre ambas, en vez de quedarse en grises intermedios.
+# El smoothstep empuja los valores a los extremos, así las dos zonas quedan bien
+# diferenciadas en vez de promediarse en un gris intermedio.
 TERRAIN_FLOOR_FIELD_CONTRAST_PASSES = 2      # pasadas de smoothstep: separa fina de ancha
 
 # Grano fibroso de alta frecuencia, multiplicado sobre la banda.
@@ -79,21 +55,16 @@ TERRAIN_GRAIN_CELL_RANGE = (4.0, 12.0)       # su tamaño de celda, en px
 TERRAIN_GRAIN_CONTRAST   = (0.5, 0.9)        # cuánto modula la banda
 
 # ── Cortes en las bandas finas ─────────────────────────────────────────────
-# Las líneas finas de las referencias reales son discontinuas, no un trazo
-# continuo. Un campo de ruido aparte borra parte de la banda; el umbral se
-# escala por el mismo campo de floor, así que las zonas anchas (floor bajo)
-# quedan intactas y solo se cortan las finas. El grano fibroso no sirve para
-# esto: promedia varias octavas, se concentra cerca de 0.5 y nunca llega a
-# valores lo bastante bajos como para apagar un píxel.
+# Las líneas finas de las referencias son discontinuas. Un campo de ruido aparte
+# borra parte de la banda; el grano fibroso no sirve para esto, porque promedia
+# varias octavas y nunca baja lo suficiente como para apagar un píxel.
 #
-# Qué banda se puede cortar se decide por su ancho REAL en píxeles, no por el
-# campo de floor: `floor_norm` se normaliza por imagen, así que siempre hay un
-# tercio "más fino que el resto" aunque en píxeles siga siendo ancho — el ancho
-# real depende también del período de banda. Cortar por floor deja agujeros
-# negros en medio de bandas anchas, que no se leen como línea discontinua sino
-# como defecto. La apertura morfológica sí mide ancho absoluto: una banda más
-# gruesa que ~2*RADIUS+1 px sobrevive intacta (con sus bordes) y queda
-# protegida, mientras que una fina desaparece en la erosión y es cortable.
+# Qué banda se puede cortar se decide por su ancho REAL en píxeles, con una
+# apertura morfológica, y no por el campo de floor: floor se normaliza por imagen,
+# así que siempre hay un tercio "más fino que el resto" aunque en píxeles siga
+# siendo ancho, y cortar ahí deja agujeros negros en medio de bandas anchas que se
+# leen como defecto. Con la apertura, una banda más gruesa que ~2*RADIUS+1 px
+# sobrevive intacta y queda protegida; una fina desaparece en la erosión.
 TERRAIN_DASH_STRENGTH    = 0.65              # umbral de corte: más alto, más discontinua
 TERRAIN_DASH_THIN_RADIUS = 3                 # apertura morfológica: qué banda es "fina"
 TERRAIN_DASH_LIT_LEVEL   = 0.15              # desde qué nivel la banda cuenta como encendida
@@ -105,14 +76,12 @@ TERRAIN_INTENSITY_RANGE = (0.05, 1.0)        # brillo global: varía 20x entre i
 
 
 def _multi_octave_field(h, w, octaves_range, cell_range, rng, resample=Image.BILINEAR):
-    """Campo [h, w] de ruido fractal multi-octava — misma técnica que
-    _multi_octave_field en detovision_segmentation/utils/dataset.py, portada a
-    `rng.random` en vez de `np.random.rand` (estado global) para que la
-    generación quede determinada por el seed por índice de generate_dataset.py.
+    """Campo [h, w] de ruido fractal multi-octava. Igual que en el repo hermano,
+    pero sobre `rng.random` y no `np.random.rand` (estado global), para que la
+    generación quede determinada por la semilla de generate_dataset.py.
 
-    `resample` permite pedir BICUBIC cuando la grilla base es muy chica (pocas
-    celdas): con BILINEAR el estirado deja costuras rectas horizontales y
-    verticales en los bordes de celda, visibles como quiebres antinaturales."""
+    `resample` permite pedir BICUBIC cuando la grilla base tiene pocas celdas: con
+    BILINEAR el estirado deja costuras rectas en los bordes de celda."""
     octaves = rng.integers(*octaves_range, endpoint=True)
     base_cell = rng.uniform(*cell_range)
 
@@ -163,12 +132,10 @@ def _terrain_grain_multiplier(h, w, rng):
 
 
 def _terrain_dash_cut(h, w, rng, banding):
-    """Máscara booleana de píxeles a apagar para cortar en segmentos las bandas
-    finas, dejando intactas las anchas — ver TERRAIN_DASH_STRENGTH.
-
-    La apertura (erosión seguida de dilatación) se hace repitiendo MinFilter/
-    MaxFilter de 3x3: equivale a un kernel de 2*RADIUS+1 y es bastante más
-    rápido que pedirle a PIL ese kernel de una."""
+    """Máscara de píxeles a apagar para cortar en segmentos las bandas finas,
+    dejando intactas las anchas (ver TERRAIN_DASH_STRENGTH). La apertura se hace
+    repitiendo MinFilter/MaxFilter de 3x3: equivale a un kernel de 2*RADIUS+1 y es
+    bastante más rápido que pedirle a PIL ese kernel de una."""
     dash = _stretch_to_unit_range(
         _multi_octave_field(h, w, TERRAIN_DASH_OCTAVES, TERRAIN_DASH_CELL_RANGE, rng))
 
@@ -184,13 +151,9 @@ def _terrain_dash_cut(h, w, rng, banding):
 
 
 def _terrain_floor_field(h, w, rng):
-    """Campo [h, w] en [0, 1] que module el piso de banda espacialmente —
-    valor alto en una zona da bandas finas ahí, valor bajo da bandas más
-    anchas, para que ambos "tipos" convivan dentro de la misma imagen.
-
-    Usa BICUBIC (la grilla base son pocas celdas, ver _multi_octave_field) y
-    remata con smoothstep para que las dos zonas queden bien diferenciadas en
-    vez de promediarse en un gris intermedio."""
+    """Campo [0, 1] que modula el piso de banda espacialmente: alto da bandas finas
+    ahí, bajo las da anchas, para que los dos tipos convivan en la misma imagen.
+    Ver TERRAIN_BLOTCH_FLOOR_RANGE."""
     field = _multi_octave_field(h, w, TERRAIN_FLOOR_FIELD_OCTAVES, TERRAIN_FLOOR_FIELD_CELL_RANGE,
                                 rng, resample=Image.BICUBIC)
     field = _stretch_to_unit_range(field)
@@ -200,9 +163,9 @@ def _terrain_floor_field(h, w, rng):
 
 
 def _terrain_blotch_brightness(h, w, rng):
-    """Mapa de brillo [0, 255] con bandas suaves (modulación seno) + piso +
-    grano fibroso + intensidad global — ver _fake_terrain_blotch_brightness en
-    detovision_segmentation/utils/dataset.py para el razonamiento completo."""
+    """Mapa de brillo [0, 255]: bandas por modulación seno del campo de elevación,
+    recortadas por el piso, moduladas por el grano y escaladas por la intensidad
+    global. Ver _fake_terrain_blotch_brightness en el repo hermano."""
     field = _terrain_elevation_field(h, w, rng)
     lo, hi = field.min(), field.max()
     normalized = (field - lo) / (hi - lo + 1e-8)
@@ -235,11 +198,8 @@ def draw_terrain(
     rng: np.random.Generator,
     prob: float = TERRAIN_PROB,
 ) -> None:
-    """Sortea si esta imagen lleva manchón de terreno (probabilidad `prob`) y,
-    si corresponde, lo dibuja sobre `tensor` vía np.maximum (mismo criterio de
-    composición que draw_center/draw_smoke). No recibe `mask`: nunca se marca
-    como clase propia, queda como fondo salvo que humo/trayectoria/derrumbe lo
-    cubran después (ver docstring del módulo)."""
+    """Sortea si esta imagen lleva manchón de terreno y lo dibuja con np.maximum,
+    el mismo criterio de composición que el resto del pipeline."""
     if rng.random() >= prob:
         return
 

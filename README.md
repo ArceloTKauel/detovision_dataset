@@ -1,95 +1,72 @@
 # Detovision Dataset Generator
 
-Generador sintético de imágenes de explosiones, diseñado para crear datasets de entrenamiento para modelos de visión por computadora (segmentación semántica).
+Generador sintético de explosiones de voladura para entrenar segmentación
+semántica. Produce imágenes de 768x512 en escala de grises (la entrada) junto con
+su máscara RGB (la salida), en un solo pase que comparte todos los sorteos.
 
-## Qué genera
+Las clases en la máscara:
 
-Pares de imágenes PNG de 768x512 (ancho x alto) generados simultáneamente en un solo pase:
+| color | clase | |
+|---|---|---|
+| rojo | fondo | incluye el terreno, que es un artefacto de cámara y no un objeto |
+| verde | humo | la pluma, sus filamentos y las sub-nubes incandescentes |
+| azul | trayectoria | con gradiente real vía heatmap, no un color plano |
+| amarillo | derrumbe | desactivada, ver `DRAW_LANDSLIDES` en `main.py` |
 
-- **Entrada (escala de grises)**: imagen en escala de grises continua (no binarizada) con humo texturizado (+ sub-nubes de humo blanco), trayectorias punteadas y franjas de derrumbe (cuando ocurren; clase actualmente desactivada, ver `DRAW_LANDSLIDES` en `main.py`).
-- **Salida (RGB)**: máscara de segmentación en PNG modo RGB — fondo/humo/derrumbe con color plano, trayectoria con gradiente real vía heatmap:
-  - **Rojo** = fondo
-  - **Verde** = humo
-  - **Azul** (gradiente: intenso al centro, tenue hacia el borde) = trayectorias
-  - **Amarillo** = derrumbe (franjas de desprendimiento de tierra/rocas)
+## Dos formatos
 
-## Estructura del proyecto
-
-```
-main.py               → Punto de entrada. Orquesta el pipeline y genera ambas imágenes.
-generate_dataset.py   → Generación masiva (10k pares) con multiprocessing.
-canvas.py             → Lienzo, cuadrilátero de impacto, centros de fragmentos.
-smoke.py              → Humo con zonas concéntricas + manchas sustractivas + sub-nubes de humo blanco.
-landslide.py           → Franjas de derrumbe: bordes quebrados + textura de dientes perpendiculares.
-trajectories.py       → Trayectorias rectas, parabólicas en lazo y de sobrevuelo, con spacing cuadrático + ráfagas.
-perlin_noise.py       → Implementación de Perlin noise 2D con octavas.
-export.py             → Conversión de tensor a imagen PNG en escala de grises y máscara a PNG RGB.
-```
-
-## Pipeline de generación
-
-Ambas salidas (escala de grises y máscara RGB) se generan en el mismo pase, compartiendo todos los cálculos y parámetros aleatorios:
-
-1. Crear lienzo vacío (512 alto x 768 ancho, fondo negro) + máscara de segmentación + heatmap de gradiente para trayectorias
-2. Generar cuadrilátero aleatorio → zona de impacto
-3. Calcular centroide → origen de la explosión
-4. Sortear la escala de brillo global y dibujar el centro principal + 40-80 centros secundarios dentro del cuadrilátero, camuflados por debajo del brillo del núcleo de humo (marcados como humo en la máscara)
-5. Dibujar humo con Perlin noise (4 zonas + manchas sustractivas → verde en la máscara), más 1-2 sub-nubes de "humo blanco" (70% de probabilidad) simulando metralla/brasas incandescentes
-6. Dibujar trayectorias de metralla: 15-30 rectas, 15-30 parabólicas en lazo (vuelven al punto de partida) y 1-4 de sobrevuelo (arco abierto que pasa por encima de la nube y aterriza en otro punto):
-   - En la entrada: punteadas con spacing cuadrático + ráfagas de 1-5 píxeles
-   - En la máscara: azul con gradiente real vía heatmap (no líneas planas)
-7. Dibujar franjas de derrumbe (actualmente desactivado, `DRAW_LANDSLIDES = False`; cuando está activo: ~40% de las imágenes, 1-8 franjas): bordes quebrados + textura de dientes perpendiculares → amarillo en la máscara, excluyendo un radio alrededor de la explosión
-8. Sincronizar máscara: píxeles de humo que quedaron en negro puro (p. ej. manchas sustractivas que no dibujaron nada) vuelven a fondo
-
-## Uso
-
-### Prueba rápida (4 pares)
+**Imagen única** — una explosión completa por par entrada/máscara.
 
 ```bash
-uv run main.py
+uv run main.py               # 4 pares de prueba en la raíz
+uv run generate_dataset.py   # 10.000 pares en dataset/{inputs,targets}/
 ```
 
-Genera 4 pares: `explosion_N.png` (entrada en escala de grises) + `explosion_N_mask.png` (salida RGB).
-
-### Generación del dataset completo (10k pares)
+**Secuencia temporal** — la misma explosión repartida en 90 frames, donde cada uno
+muestra solo lo que nace en su tramo (no el acumulado). La unidad de entrenamiento
+es un bloque de 9 frames apilados como canales, con una máscara por bloque.
 
 ```bash
-uv run generate_dataset.py
+uv run sequence.py                    # una secuencia de ejemplo en sequence/
+uv run sequence.py 7                  # semilla fija, para comparar cambios
+uv run sequence.py 7 36 acc           # 36 frames, en modo acumulado
+uv run generate_sequence_dataset.py   # 3.000 secuencias en dataset_sequences/
 ```
 
-Genera 10,000 pares de imágenes usando multiprocessing (autodetecta cores de la CPU).
-Las imágenes se guardan en:
+El índice de cada muestra es su semilla, así que los dos datasets son
+reproducibles. La propiedad que ata los dos formatos: el último frame de una
+secuencia acumulada es bit a bit lo que devuelve `generate_explosion` con el mismo
+`rng`.
+
+## Mapa
 
 ```
-dataset/
-    inputs/     → 00000.png a 09999.png (escala de grises, sin binarizar)
-    targets/    → 00000.png a 09999.png (máscaras RGB)
+main.py                       el pipeline de una explosión, en un solo pase
+sequence.py                   la misma explosión repartida en frames, por retroceso
+generate_dataset.py           generación masiva, imagen única
+generate_sequence_dataset.py  generación masiva, secuencias por bloques
+
+canvas.py        lienzo, línea de tiro (la fila de pozos) y centros de fragmento
+terrain.py       manchón de parallax de terreno: la textura de fondo del dominio
+smoke.py         la pluma (casco convexo + aros), filamentos y sub-nubes
+trajectories.py  metralla: rectas, lazos que vuelven al origen y arcos de sobrevuelo
+landslide.py     franjas de derrumbe (clase desactivada)
+perlin_noise.py  ruido Perlin 2D con octavas
+export.py        tensores y máscaras a PNG, y contact sheets de una secuencia
 ```
 
-Cada índice se usa como semilla aleatoria, por lo que el dataset es reproducible.
+Cada módulo lleva arriba qué hace y por qué, y cada constante la medición sobre
+las referencias reales que la fija.
+
+## Herramientas de inspección
+
+```bash
+uv run pixel_inspector_gui.py [imagen]   # zoom, selección por clase e histogramas
+uv run pixel_histogram.py <imagen> --punto X Y etiqueta ...
+uv run zoom_preview.py <imagen> [--box x0 y0 x1 y1] [--zoom N]
+```
 
 ## Dependencias
 
-- **numpy**: operaciones matriciales y generación aleatoria
-- **Pillow (PIL)**: exportación a PNG y dibujo de polígonos sustractivos
-
-## Conceptos clave
-
-### Spacing cuadrático + ráfagas en trayectorias
-Los puntos de las trayectorias no son equidistantes. El spacing sigue `ratio² × max_spacing`, donde `ratio` es la distancia al origen normalizada (0 a 1). Esto hace que los puntos sean densos cerca de la explosión y dispersos lejos. Además, cada punto inicia una ráfaga de 1-5 píxeles consecutivos (70% de probabilidad cada uno), generando agrupaciones orgánicas (`. ...  .. .....  .`) en vez de puntos solitarios (`. . . . .`).
-
-### Perlin noise en el humo
-Se usan cuatro capas de Perlin noise:
-- **Grueso** (scale grande, 5 octavas): distorsiona los bordes del humo para que no sean circulares.
-- **Fino** (scale pequeño, 3 octavas): varía el brillo dentro del core.
-- **Grano** (scale muy pequeña, 2 octavas): rompe la superficie lisa con textura fibrosa/granulada, incluso dentro del core.
-- **Sustractivo** (3 octavas): determina dónde se generan las manchas/huecos.
-
-### Sub-nubes de humo blanco
-`draw_white_blobs` no dibuja puntos sueltos: elige un centro al azar dentro del humo ya trazado y vuelve a llamar a `draw_smoke` con un radio más chico (35-60% de `smoke_radius`) y un piso de brillo alto (130 en vez de 15). Así la sub-nube hereda la misma textura orgánica (zonas core/mid/outer/fringe + Perlin) que el humo normal, pero se lee como un núcleo incandescente en vez de gris — simula metralla o brasas agrupadas dentro de la nube.
-
-### Tipos de trayectoria
-Las tres variantes rasterizan con Bresenham + spacing cuadrático + ráfagas, pero difieren en geometría: **rectas** (`draw_trajectory`), **parabólicas en lazo** (`draw_returning_parabola`, describen una elipse completa y cierran exactamente sobre su punto de partida) y **de sobrevuelo** (`draw_flyover_trajectory`, medio lazo que se eleva por encima de la nube de humo y aterriza en otro punto, sin volver al origen).
-
-### Máscara de segmentación
-La máscara se construye durante el mismo pase de generación usando un tensor de etiquetas (0=fondo, 1=humo, 2=trayectoria, 3=derrumbe) más un heatmap aparte para el gradiente de trayectoria. La prioridad de clases es **humo > trayectoria > derrumbe > fondo**: cada clase de menor prioridad solo se marca sobre píxeles que todavía son fondo, así que nunca pisa a una clase de mayor prioridad ya dibujada. Además, el derrumbe nunca dibuja (ni en la entrada ni en la máscara) dentro de un radio de exclusión alrededor del origen de la explosión, para que nunca pase por encima del humo aunque este tenga huecos (manchas sustractivas). Al final del pase se sincronizan los píxeles de humo que quedaron en negro puro (p. ej. manchas sustractivas que no dibujaron nada) reseteándolos a fondo en la máscara. Al exportar (`export.py::mask_to_rgb`), fondo/humo/derrumbe se pintan con color plano (rojo/verde/amarillo) y la trayectoria usa el canal azul con la intensidad del heatmap — no es PNG modo paleta, porque una paleta de 256 entradas no puede representar el gradiente continuo.
+numpy, Pillow, tqdm (barra de avance de la generación masiva) y matplotlib, este
+último solo para las herramientas de inspección.

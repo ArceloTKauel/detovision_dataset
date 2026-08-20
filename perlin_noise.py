@@ -1,18 +1,8 @@
 """
-perlin_noise.py - Generación de ruido Perlin 2D con octavas.
+perlin_noise.py - Ruido Perlin 2D con octavas, vectorizado.
 
-Implementación vectorizada de Perlin noise usado para dar textura orgánica
-al humo (distorsión del borde, variación de brillo) y para generar las
-manchas sustractivas dentro del humo.
-
-Funciones:
-    - perlin_noise_2d(shape, scale, rng, octaves): Genera un mapa de ruido
-      Perlin 2D normalizado entre [0, 1]. Cada octava duplica la frecuencia
-      y reduce la amplitud a la mitad, sumando detalle progresivo.
-
-Parámetros clave:
-    - scale: tamaño de los "grumos" del ruido. Más grande = formas más suaves.
-    - octaves: capas de detalle. Más octavas = bordes más irregulares.
+Da la textura orgánica del humo —distorsión del borde, variación de brillo— y
+decide dónde caen sus manchas sustractivas.
 """
 
 import numpy as np
@@ -42,21 +32,19 @@ def perlin_noise_2d(shape: tuple[int, int], scale: float, rng: np.random.Generat
         ys = np.linspace(0, grid_h - 1, h, endpoint=False)
         xs = np.linspace(0, grid_w - 1, w, endpoint=False)
 
-        # Índices de las celdas (esquina inferior-izquierda y superior-derecha)
+        # Índices de las celdas y posición fraccional dentro de cada una
         y0 = ys.astype(int)
         x0 = xs.astype(int)
         y1 = y0 + 1
         x1 = x0 + 1
 
-        # Posición fraccional dentro de cada celda
         fy = ys - y0
         fx = xs - x0
 
-        # Suavizado con curva hermite: 3t² - 2t³ (elimina artefactos de grilla)
+        # Curva hermite: elimina los artefactos de grilla
         fy_smooth = fy * fy * (3 - 2 * fy)
         fx_smooth = fx * fx * (3 - 2 * fx)
 
-        # Preparar arrays para operaciones vectorizadas (broadcasting)
         fy_s = fy_smooth[:, np.newaxis]
         fx_s = fx_smooth[np.newaxis, :]
         fy_col = fy[:, np.newaxis]
@@ -67,7 +55,7 @@ def perlin_noise_2d(shape: tuple[int, int], scale: float, rng: np.random.Generat
         y1_col = y1[:, np.newaxis]
         x1_row = x1[np.newaxis, :]
 
-        # Vectores distancia desde cada esquina de la celda al píxel
+        # Distancia desde cada esquina de la celda al píxel
         d00_y = fy_col
         d00_x = fx_row
         d10_y = fy_col - 1

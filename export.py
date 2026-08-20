@@ -1,18 +1,9 @@
 """
-export.py - Exportación de tensores a imágenes PNG.
+export.py - Exportación de tensores a PNG.
 
-Convierte los arrays numpy a imágenes PNG usando Pillow.
-
-Funciones:
-    - tensor_to_image(tensor, path): Guarda un tensor 2D en escala de grises.
-    - contact_sheet(paths, path, brightness): Junta varias imágenes numeradas en
-      una grilla, para revisar una secuencia temporal completa de un vistazo.
-    - mask_to_rgb(mask, heatmap, path): Guarda la máscara de segmentación como
-      PNG RGB. Fondo/humo/derrumbe se pintan con color plano (rojo/verde/
-      amarillo); la clase trayectoria usa el canal azul con la intensidad del
-      heatmap (gradiente: intenso al centro, tenue hacia el borde). No usa
-      modo paleta ("P") porque una paleta de 256 entradas no puede representar
-      un gradiente continuo.
+La máscara sale en modo RGB y no en paleta ("P") porque la clase trayectoria lleva
+un gradiente continuo en el canal azul, y una paleta de 256 entradas no puede
+representarlo.
 """
 
 import numpy as np
@@ -30,11 +21,10 @@ def tensor_to_image(tensor: np.ndarray, path: str) -> None:
 
 
 def contact_sheet(paths: list[str], path: str, brightness: float = 1.0) -> None:
-    """Grilla con las imágenes de `paths` en orden, cada una rotulada con su
-    índice. `brightness` multiplica el resultado: las imágenes de este dominio
-    son muy oscuras (las referencias reales tienen p50 entre 7 y 10 sobre 255) y
-    sin realzar no se distingue nada a tamaño de miniatura.
-    """
+    """Grilla con las imágenes de `paths` en orden, rotuladas con su índice, para
+    revisar una secuencia completa de un vistazo. `brightness` multiplica el
+    resultado: el dominio es muy oscuro (p50 entre 7 y 10) y sin realzar no se
+    distingue nada a tamaño de miniatura."""
     tiles = [Image.open(p).convert("RGB") for p in paths]
     tw, th = CONTACT_SHEET_TILE
     cols = CONTACT_SHEET_COLUMNS
@@ -55,8 +45,7 @@ def contact_sheet(paths: list[str], path: str, brightness: float = 1.0) -> None:
 
 
 def mask_to_rgb(mask: np.ndarray, heatmap: np.ndarray, path: str) -> None:
-    """Combina la máscara categórica (fondo/humo/derrumbe) con el heatmap de
-    gradiente de trayectoria en un único PNG RGB, y lo guarda en path."""
+    """Combina la máscara categórica con el heatmap de trayectoria en un PNG RGB."""
     h, w = mask.shape
     rgb = np.zeros((h, w, 3), dtype=np.uint8)
     rgb[mask == 0] = (255, 0, 0)    # fondo -> rojo
@@ -64,8 +53,7 @@ def mask_to_rgb(mask: np.ndarray, heatmap: np.ndarray, path: str) -> None:
     rgb[mask == 3] = (255, 255, 0)  # derrumbe -> amarillo
 
     # Trayectoria: azul con intensidad = heatmap. El heatmap ya respeta la
-    # prioridad de clases (nunca se pinta sobre humo/derrumbe), así que no
-    # hace falta forzar el orden acá.
+    # prioridad de clases, así que no hace falta forzar el orden acá.
     traj = heatmap > 0
     rgb[traj, 0] = 0
     rgb[traj, 1] = 0

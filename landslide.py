@@ -1,54 +1,25 @@
 """
-landslide.py - Generación de franjas de derrumbe (desprendimiento de tierra/rocas).
+landslide.py - Franjas de derrumbe (clase 3). DESACTIVADA: ver DRAW_LANDSLIDES.
 
-Dibuja canales independientes de la explosión (no comparten origen ni tocan
-necesariamente el humo), simulando desprendimientos de tierra o rocas que
-podrían haber ocurrido en cualquier parte del encuadre. Todas las franjas de
-una imagen son aproximadamente paralelas entre sí (comparten una dirección
-general con variación leve por franja), pero cada una arranca en un punto
-aleatorio independiente del canvas. Cada franja es **una sola línea**
-central, generada como un "paso del borracho" con sesgo (random walk en el
-rumbo, con atracción leve de vuelta hacia la dirección original — ver
-generate_stripe_axis), no una recta ni un canal de 2 bordes/riel.
+Desprendimientos independientes de la explosión: no comparten origen ni tocan
+necesariamente el humo. Las franjas de una imagen son aproximadamente paralelas
+entre sí, pero cada una arranca en un punto suelto del lienzo.
 
-A lo largo de esa línea, a intervalos (spacing cuadrático: denso cerca del
-inicio de la franja, disperso hacia el extremo lejano — mismo esquema que
-usa trajectories.py para sus puntos), hay "puntos de caída": desde cada uno
-sale una mini-trayectoria hacia el MISMO lado dentro de una franja (no
-alternan al azar punto por punto), apuntando siempre hacia el origen de la
-explosión (sin importar si la franja queda a la izquierda, derecha, arriba o
-abajo de ella). Cada punto de caída sortea su propio alfa (gaussiano, media
-0.5, ver _ALPHA_MEAN/_ALPHA_STD): si alfa<0.5 la mini-trayectoria es una
-recta, si alfa>=0.5 es una mini-parábola con offset cuadrático perpendicular
-al ángulo (ver _parabola_points, lógica autocontenida en este módulo). El
-largo de cada mini-trayectoria es más grande cerca del punto de inicio de la
-franja y más chico hacia su extremo lejano.
+Cada franja es UNA línea central —un paso del borracho con atracción leve hacia la
+dirección original, ni recta ni errática— con "puntos de caída" repartidos a lo
+largo. De cada uno sale una mini-recta o mini-parábola (según un alfa gaussiano)
+hacia el MISMO lado de la franja, apuntando siempre al origen de la explosión, y
+cada vez más corta hacia el extremo lejano.
 
-Tanto el eje como las mini-trayectorias se dibujan punteados en el B/W
-(spacing cuadrático + ráfagas de 1-3 píxeles, mismo patrón que
-trajectories.py), mientras que la máscara pinta el trazo completo — igual
-asimetría mask/tensor que ya usan las trayectorias (el B/W simula
-visibilidad parcial, la máscara representa la clase real completa).
+El eje y las caídas se dibujan punteados en el tensor pero la máscara pinta el
+trazo completo: misma asimetría que usaban las trayectorias antes de que la
+etiqueta pasara a marcarse solo donde hay tinta (ver trajectories.py — si esta
+clase se reactiva, hay que revisar esto).
 
-Todas las funciones que aceptan mask pintan clase 3 (derrumbe) solo sobre
-píxeles de fondo (clase 0). Esto implementa la prioridad
-humo > trayectoria > derrumbe > fondo sin lógica adicional, siempre que
-draw_landslides se llame después de draw_smoke y draw_trajectories en el
-pipeline de generate_explosion.
-
-Además, ninguna franja dibuja píxeles (ni en tensor ni en mask) dentro del
-círculo de exclusión de la explosión (exclude_origin/exclude_radius): el
-derrumbe nunca pasa por encima del humo, incluso a través de los huecos que
-dejan las manchas sustractivas del humo dentro de su propia silueta.
-
-Funciones:
-    - generate_stripe_axis(...): genera el eje central de una franja como un
-      random walk sesgado (paso del borracho): suave, ni recto ni errático.
-    - draw_landslide_stripe(...): dibuja una franja completa (1 línea central
-      + puntos de caída con mini-rectas/parábolas según alfa), con largo que
-      se angosta desde su punto de inicio hacia el extremo lejano.
-    - draw_landslides(...): genera N franjas paralelas con puntos de inicio
-      independientes, distribuidos en cualquier parte del canvas.
+La clase 3 se pinta solo sobre fondo, lo que implementa la prioridad
+humo > trayectoria > derrumbe sin lógica extra mientras se llame al final. Y
+ninguna franja dibuja dentro del círculo de exclusión, así que el derrumbe nunca
+pasa por encima del humo ni por los huecos que dejan sus manchas sustractivas.
 """
 
 import numpy as np
@@ -79,19 +50,10 @@ def _draw_dotted(
     exclude_radius: float = 0.0,
     max_spacing: float = 50.0,
 ) -> None:
-    """
-    Dibuja una polilínea (lista de píxeles ya rasterizados) con el mismo
-    patrón punteado que trajectories.py: spacing cuadrático (ratio² *
-    max_spacing, denso al inicio de la lista y disperso al final) más
-    "ráfagas" de 1-3 píxeles consecutivos con 70% de probabilidad cada uno.
-
-    La máscara pinta el trazo COMPLETO (clase 3) sin puntear — representa el
-    derrumbe real; el B/W queda punteado, simulando visibilidad parcial
-    (misma asimetría mask/tensor que ya usan las trayectorias).
-
-    Si se pasa exclude_origin/exclude_radius, ningún píxel dentro de ese
-    radio se dibuja (ni en tensor ni en mask).
-    """
+    """Dibuja una polilínea ya rasterizada con el mismo patrón punteado que
+    trajectories.py: spacing cuadrático más ráfagas de 1-3 píxeles. La máscara
+    pinta el trazo COMPLETO, sin puntear. Nada se dibuja dentro de
+    exclude_origin/exclude_radius, ni en tensor ni en mask."""
     h, w = tensor.shape
     total_len = max(len(points), 1)
     ey, ex = exclude_origin if exclude_origin is not None else (0.0, 0.0)
@@ -140,10 +102,7 @@ _ALPHA_STD = 0.25                            # desvío de esa gaussiana
 def _parabola_points(
     y0: float, x0: float, angle: float, length: float, curvature: float, num_steps: int
 ) -> list[tuple[int, int]]:
-    """
-    Genera los píxeles de una mini-parábola: avance lineal en angle + offset
-    cuadrático (curvature * t²) perpendicular a esa dirección.
-    """
+    """Mini-parábola: avance lineal en angle + offset cuadrático perpendicular."""
     cos_a, sin_a = np.cos(angle), np.sin(angle)
     perp_angle = angle + np.pi / 2
     cos_p, sin_p = np.cos(perp_angle), np.sin(perp_angle)
@@ -168,14 +127,10 @@ def generate_stripe_axis(
     rng: np.random.Generator,
     num_control_points: int = 10,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Genera el eje central de una franja de derrumbe como un "paso del
-    borracho" con sesgo: en cada paso el rumbo gira un poco al azar respecto
-    al paso anterior (ruido gaussiano), con una atracción leve de vuelta
-    hacia angle (proceso tipo Ornstein-Uhlenbeck) para que la franja siga
-    avanzando en esa dirección general en vez de deambular sin rumbo.
-    Retorna (points (N,2) en [y,x], t (N,) progreso normalizado 0-1).
-    """
+    """Eje central de una franja: paso del borracho con sesgo — el rumbo gira al
+    azar en cada paso, con atracción leve de vuelta hacia `angle`
+    (Ornstein-Uhlenbeck) para que avance en esa dirección en vez de deambular.
+    Retorna (points (N,2) en [y,x], t (N,) progreso normalizado)."""
     oy, ox = start_point
     n = num_control_points
     step_size = length / (n - 1)
@@ -210,19 +165,13 @@ def draw_landslide_stripe(
     exclude_origin: tuple[float, float] | None = None,
     exclude_radius: float = 0.0,
 ) -> None:
-    """
-    Dibuja una franja de derrumbe: una sola línea central (con wiggle
-    orgánico) más puntos de caída a lo largo de ella, cada uno con una
-    mini-recta o mini-parábola (según su propio alfa gaussiano) hacia el
-    MISMO lado (apuntando hacia exclude_origin, ver abajo), con largo máximo
-    que va de tooth_len_start (cerca de start_point) a tooth_len_end
-    (extremo lejano).
-    exclude_origin/exclude_radius: zona (típicamente la explosión) sobre la
-    que la franja nunca dibuja, ni en tensor ni en mask. Además, exclude_origin
-    se usa como referencia para el "sentido" de la franja: todas las
-    mini-trayectorias apuntan hacia ese punto, sin importar de qué lado de la
-    explosión quede la franja (izquierda, derecha, arriba, abajo).
-    """
+    """Una franja completa: la línea central más sus puntos de caída, con largo
+    máximo que va de tooth_len_start (cerca del inicio) a tooth_len_end (extremo
+    lejano).
+
+    exclude_origin cumple dos papeles: la zona sobre la que la franja nunca dibuja,
+    y la referencia del "sentido" — todas las caídas apuntan hacia ese punto, esté
+    la franja del lado que esté."""
     num_control_points = max(8, int(length / 60))
     axis, t = generate_stripe_axis(start_point, angle, length, rng, num_control_points)
     n = len(t)
@@ -239,19 +188,17 @@ def draw_landslide_stripe(
     tangents = tangents / norms[:, None]
     perps = np.stack([-tangents[:, 1], tangents[:, 0]], axis=1)
 
-    # Eje central: una sola línea quebrada (conecta los puntos de control),
-    # concatenada en una única polilínea para que el punteado sea continuo
-    # a lo largo de toda la franja (no se reinicia en cada punto de control)
+    # Los tramos se concatenan en una sola polilínea para que el punteado sea
+    # continuo a lo largo de la franja y no se reinicie en cada punto de control.
     axis_points: list[tuple[int, int]] = []
     for i in range(n - 1):
         segment = _line_points(axis[i, 0], axis[i, 1], axis[i + 1, 0], axis[i + 1, 1])
         axis_points.extend(segment[1:] if i > 0 else segment)
     _draw_dotted(tensor, mask, axis_points, rng, exclude_origin, exclude_radius)
 
-    # Sentido de la franja: un solo lado para TODOS los dientes, apuntando
-    # hacia exclude_origin (la explosión). Se calcula desde el punto del eje
-    # más cercano al origen (ahí la perpendicular indica mejor "hacia dónde"
-    # queda la explosión respecto a la franja).
+    # Un solo lado para TODOS los dientes, apuntando hacia la explosión. Se calcula
+    # desde el punto del eje más cercano al origen, donde la perpendicular indica
+    # mejor hacia dónde queda.
     if exclude_origin is not None:
         oy, ox = exclude_origin
         dists_to_origin = np.sqrt((axis[:, 0] - oy) ** 2 + (axis[:, 1] - ox) ** 2)
@@ -261,9 +208,8 @@ def draw_landslide_stripe(
     else:
         stripe_side = 1.0 if rng.random() < 0.5 else -1.0
 
-    # Puntos de caída: cada uno tira su propio alfa (gaussiano, media 0.5) para
-    # decidir si "cae" una mini-recta (alfa<0.5) o una mini-parábola (alfa>=0.5)
-    # desde el eje hacia stripe_side, apuntando siempre hacia la explosión.
+    # Cada punto de caída tira su alfa para decidir si cae una mini-recta
+    # (alfa < 0.5) o una mini-parábola, desde el eje hacia stripe_side.
     pos = 0.0
     while pos < 1.0:
         idx = pos * (n - 1)
@@ -305,16 +251,10 @@ def draw_landslides(
     exclude_origin: tuple[float, float] | None = None,
     exclude_radius: float = 0.0,
 ) -> None:
-    """
-    Genera num_stripes franjas de derrumbe independientes entre sí: comparten
-    una dirección general (angle_spread es la variación máxima entre franjas
-    alrededor de un ángulo central aleatorio por imagen, para que queden
-    aproximadamente paralelas), pero cada una arranca en un punto aleatorio
-    distinto, distribuido en cualquier parte del canvas sin relación con el
-    origen de la explosión. exclude_origin/exclude_radius acotan la zona de
-    la explosión sobre la que ninguna franja puede dibujar (ver docstring de
-    módulo).
-    """
+    """num_stripes franjas independientes: comparten una dirección general
+    (angle_spread es la variación máxima alrededor de un ángulo sorteado por
+    imagen, para que queden aproximadamente paralelas) pero cada una arranca en un
+    punto suelto del lienzo, sin relación con el origen de la explosión."""
     h, w = tensor.shape
     diagonal = np.sqrt(h ** 2 + w ** 2)
     center_angle = rng.uniform(0, 2 * np.pi)

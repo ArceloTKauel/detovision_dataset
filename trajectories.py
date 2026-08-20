@@ -1,51 +1,29 @@
 """
-trajectories.py - Generación de trayectorias de metralla (rectas y parabólicas).
+trajectories.py - Trayectorias de metralla: rectas, lazos y arcos de sobrevuelo.
 
-Dibuja las líneas punteadas que salen de la explosión simulando fragmentos
-proyectados. Usa Bresenham para rasterizar las líneas y un sistema de spacing
-variable: los puntos son densos cerca del origen y se separan cuadráticamente
-con la distancia (ratio² * max_spacing), simulando la desaceleración de la
-metralla. Además, cada punto de dibujo inicia una "ráfaga" de 1-5 píxeles
-consecutivos (cada uno con 70% de probabilidad) para generar agrupaciones
-orgánicas de puntos en vez de puntos solitarios equidistantes. Cada
-trayectoria sortea también un ancho (1, 2 o 3 píxeles; ver
-_sample_trajectory_width) que se aplica a todos sus puntos.
+Cada trayectoria se rasteriza con Bresenham y se dibuja PUNTEADA: el spacing
+crece cuadráticamente con la distancia al origen (la metralla desacelera) y cada
+punto abre una ráfaga de 1-5 píxeles, para que el trazo sean agrupaciones y no
+puntos equidistantes. El ancho y el brillo medio se sortean una vez por
+trayectoria.
 
-Todas las funciones aceptan un parámetro opcional mask: si se pasa, marca clase 2
-sobre píxeles de fondo (clase 0) en los puntos donde el trazo dejó TINTA, no a lo
-largo del recorrido entero. Marcarlo entero dejaba el 85% de la clase sin nada
-visible en la entrada. La prioridad de clases en la
-máscara es humo > trayectoria > derrumbe > fondo, con una excepción: sobre la
-periferia FILAMENTOSA del humo (`filament_region`, ver _SMOKE_OVERRIDE_PROB) la
-trayectoria pasa por encima y gana la etiqueta, que es como se ven los "pelos"
-de metralla en las referencias reales. Dentro del núcleo de la pluma sigue
-oculta.
+La etiqueta (clase 2) se marca SOLO donde el punteado dejó tinta, no sobre el
+recorrido entero: marcarlo entero dejaba el 85% de la clase sin nada visible en
+la entrada.
 
-Funciones:
-    - bresenham(y0, x0, y1, x1): Algoritmo de Bresenham para rasterizar una
-      línea entre dos puntos. Retorna lista de coordenadas (y, x).
-    - draw_trajectory(...): Dibuja una trayectoria recta punteada con ráfagas.
-    - draw_returning_parabola(...): Dibuja una trayectoria punteada en forma
-      de lazo/óvalo que parte de un centro (dentro de la nube de humo),
-      describe una elipse completa (semi-eje mayor = alcance, pudiendo salir
-      del lienzo) y cierra exactamente sobre su punto de partida, simulando
-      metralla que cae de regreso al punto de impacto.
-    - draw_straight_trajectories(...): Genera N trayectorias rectas desde
-      centros aleatorios, con longitud mínima = ancho del humo en esa dirección.
-    - draw_parabolic_trajectories(...): Genera N trayectorias en lazo
-      (draw_returning_parabola) desde centros aleatorios.
-    - draw_trajectories(...): Función principal que dibuja ambos tipos.
+Prioridad de clases: humo > trayectoria > derrumbe > fondo. La excepción es la
+periferia FILAMENTOSA del humo, donde la trayectoria pasa por encima y gana la
+etiqueta —así se ven los "pelos" de metralla en las referencias—; dentro del
+núcleo de la pluma sigue oculta. Ver _SMOKE_OVERRIDE_PROB.
 """
 
 import numpy as np
 
 from smoke import measure_smoke_width
 
-# Pincel de gradiente para la clase trayectoria en la salida (heatmap):
-# kernel gaussiano radial, ancho para que el degradado sea gradual y visible
-# (intenso al centro, fino/tenue hacia el borde). Independiente del footprint
-# de la máscara categórica (clasificación), que se mantiene angosto.
-_HEATMAP_KERNEL_SIZE = 3                     # lado del kernel del gradiente de trayectoria
+# Pincel del gradiente de trayectoria en la salida (heatmap): gaussiana radial,
+# independiente del footprint de la máscara categórica, que va más angosto.
+_HEATMAP_KERNEL_SIZE = 3                     # lado del kernel del gradiente
 _HEATMAP_KERNEL_SIGMA = 1.6                  # su sigma
 
 _MASK_OFFSETS = (-1, 0)                      # trazo de 2 px en la máscara categórica
@@ -61,19 +39,11 @@ def _make_gradient_kernel(size: int = _HEATMAP_KERNEL_SIZE, sigma: float = _HEAT
 
 _HEATMAP_KERNEL = _make_gradient_kernel()
 
-# Clases de mask que tienen prioridad sobre la trayectoria y nunca deben
-# recibir gradiente de heatmap (humo=1, derrumbe=3). Prioridad completa:
-# humo > trayectoria > derrumbe > fondo.
 _HIGHER_PRIORITY_CLASSES = (1, 3)            # humo y derrumbe: la trayectoria no los pisa
 
-# Brillo del tensor de entrada por píxel de trayectoria: en vez de una curva
-# determinística por distancia, cada punto dibujado sortea su intensidad de
-# una gaussiana truncada al rango [_TRAJECTORY_BRIGHTNESS_RANGE], con la media
-# corrida hacia el extremo blanco para que la mayoría de los puntos salgan
-# claros pero con variación aleatoria punto a punto. La media se sortea una
-# vez por trayectoria (uniforme en _TRAJECTORY_BRIGHTNESS_MEAN_RANGE) para que
-# distintas trayectorias tengan distinto nivel de brillo entre sí. Rango
-# objetivo de la clase trayectoria (medido con pixel_inspector_gui.py): 2 a 100.
+# Brillo de un píxel de trazo: gaussiana truncada, con la media sorteada una vez
+# por trayectoria para que unas salgan más claras que otras. Rango objetivo de la
+# clase, medido con pixel_inspector_gui.py: 2 a 100.
 _TRAJECTORY_BRIGHTNESS_RANGE = (2, 100)      # recorte del brillo de un píxel de trazo
 _TRAJECTORY_BRIGHTNESS_MEAN_RANGE = (10.0, 80.0)  # media, sorteada una vez por trayectoria
 _TRAJECTORY_BRIGHTNESS_STD = 25.0            # desvío de esa gaussiana
@@ -91,11 +61,8 @@ def _trajectory_brightness(rng: np.random.Generator, mean: float) -> int:
     return int(value)
 
 
-# Ancho (en píxeles) de una trayectoria en el tensor de entrada: variable
-# categórica sorteada una vez por trayectoria (no por píxel), simulando
-# fragmentos de metralla de distinto grosor. La mayoría son de 1 píxel, con
-# probabilidad baja de 2 y muy baja de 3. Cada ancho define un bloque de
-# offsets cuadrado centrado en el punto dibujado.
+# Ancho del trazo, sorteado una vez por trayectoria y no por píxel: fragmentos de
+# distinto grosor. Cada valor define un bloque de offsets centrado en el punto.
 _TRAJECTORY_WIDTH_VALUES = (1, 2, 3)         # grosor del trazo, en px
 _TRAJECTORY_WIDTH_PROBS = (0.85, 0.12, 0.03)  # casi todas de 1 px
 _WIDTH_OFFSETS = {
@@ -111,91 +78,36 @@ def _sample_trajectory_width(rng: np.random.Generator) -> int:
 
 
 # ── Trayectorias por encima de la periferia filamentosa ────────────────────
-# El humo tiene dos partes y la trayectoria se comporta distinto en cada una:
+# El humo tiene dos partes y la trayectoria se comporta distinto en cada una: en
+# el NÚCLEO nace adentro y queda oculta (atenuada por camouflage_scale, etiquetada
+# humo); sobre la PERIFERIA FIBROSA pasa por encima, se ve y se etiqueta clase 2,
+# que es como se ven los "pelos" de metralla en mascara_cambios_final_ESS_F04.png.
+# Qué píxel es cuál lo decide smoke.py::draw_smoke_filaments y llega hasta acá
+# como `filament_region`; sin esa distinción el pelo tallaría también el núcleo y
+# partiría la pluma en fragmentos de trayectoria.
 #
-#   NÚCLEO (draw_center/draw_smoke/draw_white_blobs) — la trayectoria NACE ahí
-#   dentro y queda oculta: atenuada por camouflage_scale y etiquetada humo. Es
-#   la lógica de siempre y no cambia. El origen del fragmento no se ve, igual
-#   que en las referencias, donde la línea de tiro es una masa saturada sin
-#   pelos distinguibles adentro.
-#
-#   PERIFERIA FIBROSA (draw_smoke_filaments) — la trayectoria pasa POR ENCIMA:
-#   se ve y se etiqueta clase 2. En mascara_cambios_final_ESS_F04.png se ve
-#   clarísimo: los pelos punteados emergen de la masa central y cruzan el humo
-#   fibroso sin interrumpirse hasta salir al fondo negro.
-#
-# Qué píxel es cuál lo decide smoke.py::draw_smoke_filaments, que devuelve la
-# máscara de "humo solo por filamentos"; se propaga hasta acá como
-# `filament_region`. Sin esa distinción el pelo tallaría también el núcleo, que
-# es el modo de falla de v16 (partir la pluma en fragmentos de trayectoria).
-#
-# Esto reemplaza al intento de reclasificar estrías de humo al azar (ver nota
-# en smoke.py::_FILAMENT_MASK_LEVEL): acá el píxel clase 2 dentro del humo
-# SIEMPRE pertenece a una trayectoria que continúa fuera de la pluma, así que
-# la regla que aprende el modelo es geométrica y no un sorteo sobre una textura
-# idéntica.
-#
-# Medido en la referencia: el humo fibroso está en p50=42 / p90=61, y los
-# puntos de metralla que lo cruzan llegan a 140-177. O sea que el pelo no tiene
-# un brillo absoluto propio, sino que se lee POR CONTRASTE sobre el humo local
-# — de ahí que el piso sea relativo a tensor[ny, nx] y no un valor fijo.
-#
-# Dosis del mecanismo: fracción de las trayectorias que cruzan la periferia
-# fibrosa y se ven por encima de ella. Queda como constante y no cableado porque
-# bajarlo es la forma de aflojarlo sin tocar la geometría.
-#
-# Bajado de 1.0 a 0.5 el 2026-08-11. Medido sobre 20 semillas, con 1.0 los pelos
-# eran el 11.8% del humo que habría sin ellos (rango 7.8-16.0%) — prácticamente
-# el mismo tamaño de intervención que el 12% de estrías que reclasificó v19, que
-# produjo -46% a -63% de humo en las predicciones sobre imágenes reales. Y v20,
-# entrenado con 1.0, da -58.9% de humo en ESS_F04 (la referencia que más ejercita
-# el mecanismo) con la razón trayectoria/humo en 1.433 contra 0.532 de v18 —
-# dentro del rango de v19. La comparación v18/v20 es limpia: sus pesos de
-# entrenamiento son casi iguales (razón trayectoria/fondo 5.7 contra 5.5) y el
-# único cambio de dataset entre ambos es este mecanismo.
-#
-# O sea que el TAMAÑO de la intervención pesa tanto como su coherencia lógica:
-# que la regla sea geométrica y no un sorteo sobre textura idéntica (que era la
-# justificación para reponer los pelos tras v19) no alcanzó por sí solo.
+# Dosis: a 1.0 los pelos eran el 11.8% del humo y v20 perdió 59% de humo en
+# ESS_F04; 0.5 es media dosis del mismo mecanismo. Es la palanca para aflojarlo
+# sin tocar la geometría.
 _SMOKE_OVERRIDE_PROB = 0.5                   # probabilidad de verse sobre la periferia
-# Cuánto se levanta el pelo por encima del humo local. Calibrado contra el
-# contraste local (píxel menos la mediana de su vecindario 7x7) de la
-# estructura fina DENTRO de la pluma en ESS_F04: p90=+10, p99=+26, max=+118.
-# Con (35, 75) los pelos salían blanco puro sobre la pluma — el 18.3% por
-# encima de 190.
+# El pelo no tiene brillo propio: se lee POR CONTRASTE sobre el humo local, por
+# eso el piso es relativo a tensor[ny, nx]. Medido en ESS_F04, el contraste local
+# de la estructura fina dentro de la pluma es p90 +10 / p99 +26.
 _SMOKE_OVERRIDE_CONTRAST_RANGE = (15, 45)    # cuánto resalta sobre el humo
-# Techo absoluto del pelo sobre la pluma: ninguna de las 7 referencias supera
-# 190 en ningún píxel, así que un pelo que sature a blanco es un rasgo que el
-# modelo no va a ver nunca en producción.
-_SMOKE_OVERRIDE_MAX = 190                    # techo de ese realce
-# Sobre la periferia el pelo va de 1 px, no del ancho sorteado para el resto de
-# la trayectoria: en las referencias los pelos que cruzan la pluma son finos, y
-# un trazo de 2-3 px con realce sale como una tira gruesa que no se parece a
-# nada real. También es lo que permite que la máscara y la tinta coincidan
-# píxel a píxel ahí (ver _paint_traj_mask).
-_SMOKE_OVERRIDE_WIDTH = 1                    # grosor del trazo cuando pasa sobre el humo
+_SMOKE_OVERRIDE_MAX = 190                    # techo: ninguna de las 7 referencias lo pasa
+_SMOKE_OVERRIDE_WIDTH = 1                    # 1 px: los pelos reales son finos
 
 
 def _sample_smoke_override(rng: np.random.Generator) -> tuple[bool, int]:
-    """Sortea, una vez por trayectoria, si se ve por encima del humo y con
-    cuánto contraste sobre el humo local.
+    """Sortea, una vez por trayectoria, si se ve por encima del humo y con cuánto
+    contraste. Consume los dos sorteos siempre, aunque el primero salga negativo.
 
-    Consume siempre los dos sorteos, aunque el primero salga negativo, para que
-    cambiar _SMOKE_OVERRIDE_PROB no desplace el stream del rng ACÁ.
-
-    OJO, esa garantía NO llega hasta el final: el bucle de dibujo de cada
-    trayectoria sortea por oportunidad de dibujo (erase, burst, spacing), y
-    cuántas veces lo hace depende de si la trayectoria se ve sobre el humo. Desde
-    la primera trayectoria afectada el stream se desfasa y las siguientes caen en
-    otro lado. Verificado el 2026-08-11 con la misma semilla a dosis 1.0 y 0.0:
-    terreno, blast, humo y filamentos salen bit a bit idénticos, pero de los
-    ~38.000 píxeles clase 2 solo 3.500-6.300 coinciden entre las dos corridas.
-
-    O sea que NO se puede hacer un A/B por imagen cambiando solo esta constante:
-    la diferencia mezcla el efecto del override con otro sorteo de trayectorias.
-    Para medir el mecanismo hay que hacerlo sobre UNA corrida — contar los
-    píxeles clase 2 que caen dentro de `filament_region`, que es exactamente lo
-    que el override convierte de humo en trayectoria."""
+    Esa garantía no llega hasta el final: el bucle de dibujo sortea distinta
+    cantidad de veces según si la trayectoria se ve o no. O sea que NO se puede
+    hacer un A/B cambiando solo _SMOKE_OVERRIDE_PROB — verificado, con la misma
+    semilla a dosis 1.0 y 0.0 solo coinciden 3.500-6.300 de ~38.000 píxeles clase
+    2. Para medir el mecanismo hay que contar, sobre UNA corrida, los píxeles
+    clase 2 que caen dentro de `filament_region`."""
     hit = rng.random() < _SMOKE_OVERRIDE_PROB
     contrast = int(rng.uniform(*_SMOKE_OVERRIDE_CONTRAST_RANGE))
     return hit, (contrast if hit else 0)
@@ -212,20 +124,16 @@ def _paint_trajectory_pixel(
     override_contrast: int = 0,
     filament_region: np.ndarray | None = None,
 ) -> None:
-    """Pinta un punto de trayectoria como un bloque de `width` x `width`
-    píxeles centrado en (py, px), mezclando por máximo y clipeado al lienzo.
+    """Pinta un punto como un bloque de `width` x `width` centrado en (py, px),
+    mezclando por máximo y clipeado al lienzo.
 
-    Si se pasa mask, cada píxel del bloque que ya es humo (clase 1) se
-    atenúa con camouflage_scale antes de mezclar, para que la trayectoria se
-    camufle dentro del humo (oscurecido, ver smoke.py) en vez de sobresalir
-    a brillo pleno. Fuera del humo el brillo no se toca.
+    Con mask, un píxel que ya es humo se atenúa con camouflage_scale para que la
+    trayectoria se camufle dentro de la pluma en vez de sobresalir a brillo pleno.
 
-    override_contrast > 0 invierte ese comportamiento, pero SOLO sobre la
-    periferia fibrosa (filament_region): en vez de atenuarse, el píxel se lleva
-    a `humo local + override_contrast` cuando eso es más claro que su propio
-    brillo. Sin este piso relativo la mezcla por máximo lo borraría, porque el
-    brillo sorteado (2-100) casi siempre queda por debajo del humo. Sobre el
-    núcleo sigue camuflándose.
+    override_contrast > 0 invierte eso, pero SOLO sobre la periferia fibrosa: el
+    píxel se lleva a `humo local + override_contrast`. Sin ese piso relativo la
+    mezcla por máximo lo borraría, porque el brillo sorteado (2-100) casi siempre
+    queda por debajo del humo. Sobre el núcleo sigue camuflándose.
     """
     h, w = tensor.shape
     over_filaments = override_contrast > 0 and filament_region is not None
@@ -292,24 +200,14 @@ def _paint_over_filaments(
     filament_region: np.ndarray | None,
 ) -> bool:
     """Sobre la periferia fibrosa el trazo va CONTINUO, no punteado. Pinta el
-    píxel y devuelve True si corresponde; False si el píxel no cae ahí y hay que
-    seguir con el punteado normal.
+    píxel y devuelve True si corresponde; False si no cae ahí y hay que seguir
+    con el punteado normal.
 
-    Por qué, y es la razón de ser de todo el mecanismo: la máscara marca clase 2
-    en TODO el recorrido, pero el punteado solo deposita tinta en una fracción.
-    Medido sobre el código sin esto, el 82% de los píxeles etiquetados
-    trayectoria que caen en la periferia fibrosa no recibía nada — o sea que en
-    el 82% de su superficie el modelo veía textura de humo fibroso etiquetada
-    trayectoria, sin ninguna señal que la distinguiera. Eso es exactamente lo
-    que hacía v19, que aprendió que la fibra es metralla y en Video 3 frame 720
-    pasó de 8 detecciones a 80.
-
-    La diferencia entre este enfoque y v19 —que la clase 2 esté respaldada por
-    tinta visible— solo existe donde efectivamente hay tinta. De ahí el trazo
-    continuo.
-
-    Sobre fondo negro el punteado se mantiene: ahí cada punto salta con
-    contraste ~51 contra el vacío y el trazo se lee igual.
+    El motivo: con punteado, el 82% de los píxeles etiquetados trayectoria sobre
+    la periferia no recibía tinta — el modelo veía textura de humo fibroso
+    etiquetada trayectoria, que es lo que hizo v19 (Video 3 f720 pasó de 8 a 80
+    detecciones). Sobre fondo negro el punteado se mantiene: ahí cada punto salta
+    con contraste ~51 contra el vacío y el trazo se lee igual.
     """
     if override_contrast <= 0 or filament_region is None:
         return False
@@ -325,22 +223,16 @@ def _paint_over_filaments(
 def _paint_traj_mask(mask: np.ndarray, py: int, px: int, h: int, w: int,
                      over_smoke: bool = False,
                      filament_region: np.ndarray | None = None) -> None:
-    """Marca clase 2 sobre fondo. Con over_smoke, también le gana al humo
-    (clase 1) pero solo donde ese humo es periferia fibrosa: sobre el núcleo la
-    trayectoria queda oculta, como siempre.
+    """Marca clase 2 sobre fondo. Con over_smoke también le gana al humo, pero
+    solo donde ese humo es periferia fibrosa: sobre el núcleo queda oculta.
 
-    Sobre la periferia la marca es de 1 px (solo el píxel del recorrido), no de
-    2 px como sobre fondo. Es para que la etiqueta coincida con la tinta, que
-    ahí también es de 1 px (_SMOKE_OVERRIDE_WIDTH): con la marca de 2 px, la
-    mitad de los píxeles clase 2 sobre el humo quedaban sin tinta por
-    construcción — el mismo problema que el punteado, en chico.
+    Ahí la marca es de 1 px y no de 2, para que coincida con la tinta, que
+    también va de 1 px (_SMOKE_OVERRIDE_WIDTH): con 2 px, la mitad de los píxeles
+    clase 2 sobre el humo quedaban sin tinta por construcción.
 
-    El heatmap se estampa DESPUÉS de esto en las tres funciones de dibujo, y
-    _stamp_heatmap sigue saltando los píxeles clase 1 — o sea que el gradiente
-    cae exactamente sobre los píxeles que acá pasaron a clase 2 y no se
-    derrama sobre el humo de al lado. Importa: export.py::mask_to_rgb pinta
-    azul TODO píxel con heatmap > 0, así que un derrame convertiría humo en
-    trayectoria en el target.
+    El heatmap se estampa DESPUÉS de esto, y _stamp_heatmap salta los píxeles
+    clase 1, así que el gradiente no se derrama sobre el humo vecino. Importa
+    porque export.py::mask_to_rgb pinta azul TODO píxel con heatmap > 0.
     """
     claim_smoke = over_smoke and filament_region is not None
     for dy in _MASK_OFFSETS:
@@ -355,45 +247,27 @@ def _paint_traj_mask(mask: np.ndarray, py: int, px: int, h: int, w: int,
                 mask[ny, nx] = 2
 
 
-# Radio del bloque que marca _stamp_progress alrededor de cada punto del
-# recorrido. 1 (bloque 3x3) cubre exactamente todo lo que un punto puede tocar:
-# el ancho máximo del trazo (_WIDTH_OFFSETS llega a ±1), el kernel 3x3 del
-# heatmap y los offsets de la máscara (_MASK_OFFSETS = -1, 0).
+# 1 (bloque 3x3) cubre todo lo que un punto puede tocar: el ancho máximo del
+# trazo, el kernel 3x3 del heatmap y los offsets de la máscara.
 _PROGRESS_RADIUS = 1                         # vecindad que se fecha al anotar el progreso
 
 
 def _progress_window(launch: float, duration: float) -> tuple[float, float]:
-    """Ventana temporal de una trayectoria: en qué momento se lanza y en cuál
-    termina de recorrerse, ambos como fracción del tramo post-ignición.
+    """Ventana temporal de una trayectoria: cuándo se lanza y cuándo termina de
+    recorrerse, como fracción del tramo post-ignición. Con duración 0 ocupa todo
+    el tramo, que es el caso de la generación de una sola imagen.
 
-    La duración NO depende del largo del recorrido, y eso está medido, no
-    supuesto. Mirando el mismo arco a lo largo de frames consecutivos:
-
-        - Video 4 (f480→f660): un arco de unos 300 px tarda 3 pasos de un tramo
-          de ~7.
-        - Video 3 (f600→f780): un arco que cruza medio cuadro, muchísimo más
-          largo, tarda **los mismos 3 pasos** de un tramo de ~7.
-
-    Los dos dan ~0.43 del tramo con largos que difieren en un orden de magnitud.
-    Tiene sentido físico: los fragmentos salen todos en el mismo instante y caen
-    con la misma gravedad, así que el tiempo de vuelo es parecido — los que
-    llegan más lejos simplemente van más rápido.
-
-    Hacer la duración proporcional al largo (o a su raíz) es lo que producía el
-    defecto que esto arregla: los recorridos cortos salían con duración menor a
-    un frame y aparecían completos de golpe entre dos frames consecutivos, con
-    lazos dando la vuelta entera en un paso. En las referencias eso no pasa
-    nunca: todo trazo se dibuja por tramos, avanzando por la punta.
-
-    En 0 la trayectoria ocupa todo el tramo, que es el caso de la generación de
-    una sola imagen.
+    La duración NO depende del largo del recorrido, y eso está medido: dos arcos
+    que difieren en un orden de magnitud (Video 4 f480→f660 y Video 3 f600→f780)
+    tardan los mismos 3 pasos de un tramo de ~7. Tiene sentido físico — los
+    fragmentos salen juntos y caen con la misma gravedad; los que llegan más
+    lejos van más rápido. Atarla al largo hacía que los recorridos cortos
+    aparecieran completos de golpe entre dos frames.
 
     El lanzamiento se adelanta si con el sorteado la trayectoria no alcanzaría a
-    completarse: una trayectoria a medias dejaría fuera un pedazo de recorrido que
-    ningún frame llega a mostrar, y entonces la unión de la secuencia ya no
-    coincidiría con la imagen que genera el pipeline sin tiempo. Esa equivalencia
-    es la propiedad sobre la que se apoya todo sequence.py — en modo acumulado la
-    cumple el último frame, y en modo ventana la unión de todos.
+    completarse: un pedazo de recorrido que ningún frame muestra rompería la
+    equivalencia entre la unión de la secuencia y la imagen sin tiempo, que es la
+    propiedad sobre la que se apoya todo sequence.py.
     """
     if duration <= 0:
         return (0.0, 1.0)
@@ -404,24 +278,17 @@ def _progress_window(launch: float, duration: float) -> tuple[float, float]:
 
 def _stamp_progress(progress_map: np.ndarray, py: int, px: int, value: float) -> None:
     """Registra en qué momento del recorrido se alcanza cada píxel, quedándose
-    con el más temprano.
-
-    Es lo que permite armar la secuencia temporal retrocediendo (ver
-    sequence.py): la explosión se dibuja completa UNA vez, igual que siempre, y
-    este mapa dice para cada píxel en qué momento aparece. De ahí salen las dos
-    lecturas: el frame t es lo que nace en su tramo (modo ventana, el del
-    dataset) o todo lo nacido hasta t (modo acumulado).
-
-    Ojo si se usa para el modo ventana: este mapa guarda una sola fecha por
-    píxel, la más temprana. Donde dos trayectorias se cruzan, la segunda pasada
-    no queda registrada — el píxel aparece en la ventana de la primera. No se
-    pierde tinta (la unión de las ventanas cubre exactamente el acumulado, está
-    verificado), pero un guion puede quedar con un hueco de pocos píxeles en un
-    cruce. No se midió cuánto ocurre en la práctica.
+    con el más temprano. Es lo que permite armar la secuencia retrocediendo (ver
+    sequence.py) sin volver a dibujar la explosión.
 
     Que sea el momento del RECORRIDO y no el brillo es el punto: en las
-    referencias reales una trayectoria parcial es un trazo truncado —la punta
-    avanza y lo ya dibujado no cambia de brillo—, no un trazo atenuado.
+    referencias una trayectoria parcial es un trazo truncado —la punta avanza y
+    lo ya dibujado no cambia de brillo—, no un trazo atenuado.
+
+    Ojo en modo ventana: guarda una sola fecha por píxel, así que donde dos
+    trayectorias se cruzan la segunda pasada no se registra y el guion puede
+    quedar con un hueco de pocos píxeles. No se pierde tinta (la unión de las
+    ventanas cubre exactamente el acumulado, verificado).
     """
     h, w = progress_map.shape
     for ny in range(max(py - _PROGRESS_RADIUS, 0), min(py + _PROGRESS_RADIUS + 1, h)):
@@ -472,17 +339,13 @@ def draw_trajectory(
     progress_duration: float = 0.0,
 ) -> None:
     """
-    Dibuja una trayectoria recta punteada desde center en la dirección angle.
-    El spacing entre puntos crece cuadráticamente con la distancia al origen:
-    cerca = denso, lejos = disperso. Simula desaceleración de metralla.
-    erase_prob: probabilidad por oportunidad de dibujo de activar un borrado.
-    erase_frac_range: (min, max) fracción del largo total a borrar por sección.
-    camouflage_scale: atenuación aplicada a los píxeles que caen sobre humo
-    (ver _paint_trajectory_pixel), misma escala global de smoke.py.
-    progress_map: si se pasa, se anota ahí en qué punto del recorrido se alcanza
-    cada píxel, remapeado al intervalo progress_range de esta trayectoria (ver
-    _stamp_progress). No altera el dibujo ni consume rng: la imagen resultante
-    es idéntica con y sin él.
+    Trayectoria recta punteada desde center en la dirección angle.
+
+    erase_prob / erase_frac_range: probabilidad de abrir un borrado y qué
+    fracción del largo total borra.
+    camouflage_scale: atenuación sobre los píxeles que caen en humo.
+    progress_map: si se pasa, anota en qué punto del recorrido se alcanza cada
+    píxel. No altera el dibujo ni consume rng.
     """
     h, w = tensor.shape
     cy, cx = center
@@ -566,10 +429,9 @@ def draw_trajectory(
         else:
             pixels_since_draw += 1
 
-    # Etiqueta: solo donde cayó tinta, con el footprint de siempre (máscara de
-    # 2 px, gaussiano 3x3). Marcarla sobre el recorrido entero dejaba el 85% de la
-    # clase sin nada visible, y en un frame de secuencia el 43% de las colas salía
-    # 100% vacía.
+    # Etiqueta: solo donde cayó tinta. Marcarla sobre el recorrido entero dejaba
+    # el 85% de la clase sin nada visible, y en un frame de secuencia el 43% de
+    # las colas salía 100% vacía.
     if mask is not None:
         for py, px in inked:
             _paint_traj_mask(mask, py, px, h, w, over_smoke, filament_region)
@@ -589,13 +451,9 @@ def _ellipse_visible_fraction(
     w: int,
     num_samples: int = 200,
 ) -> float:
-    """
-    Estimación barata (sin rasterizar) de qué fracción del lazo completo cae
-    dentro del lienzo [0,h)x[0,w): sortea num_samples puntos a lo largo de la
-    elipse paramétrica y mide qué proporción queda dentro de los límites.
-    Usada para decidir si una geometría de lazo queda razonablemente contenida
-    en el cuadro antes de rasterizarla de verdad.
-    """
+    """Qué fracción del lazo cae dentro del lienzo, estimada muestreando la
+    elipse paramétrica en vez de rasterizarla. Sirve para descartar una geometría
+    antes de dibujarla."""
     sy, sx = start
     uy, ux = np.sin(theta), np.cos(theta)
     vy, vx = side * np.cos(theta), -side * np.sin(theta)
@@ -629,22 +487,14 @@ def draw_returning_parabola(
     progress_duration: float = 0.0,
 ) -> None:
     """
-    Dibuja una trayectoria en forma de lazo/óvalo que parte de `start`
-    (un centro dentro de la nube de humo), da una vuelta completa en un
-    arco amplio y cierra exactamente sobre `start`, simulando metralla que
-    describe un arco amplio y cae de regreso al mismo punto de impacto.
-    Se rasteriza como elipse completa: semi-eje mayor `a` (alcance),
-    semi-eje menor `b` (ancho del lazo).
-    Usa Bresenham para interpolar saltos entre pasos consecutivos.
-    erase_prob: probabilidad por oportunidad de dibujo de activar un borrado.
-    erase_frac_range: (min, max) fracción del largo total a borrar por sección.
-    min_visible_fraction: si > 0, resortea la geometría del lazo (hasta
-    max_attempts veces) hasta que al menos esa fracción quede dentro del
-    lienzo. Con 0.0 (default) no hay restricción: el lazo puede salir
-    libremente del cuadro, como hasta ahora.
-    max_spacing: separación máxima entre puntos dibujados (en el lanzamiento/
-    aterrizaje, donde el spacing es mayor). Valores más chicos dan un
-    punteado más cercano/denso en todo el lazo.
+    Lazo que parte de `start` (dentro de la nube), describe una elipse completa
+    —semi-eje mayor `a` = alcance, menor `b` = ancho— y cierra exactamente sobre
+    su punto de partida: metralla que cae de regreso al punto de impacto.
+
+    min_visible_fraction: si > 0, resortea la geometría hasta max_attempts veces
+    hasta que esa fracción del lazo quede dentro del lienzo. Con 0.0 puede salir
+    del cuadro libremente.
+    max_spacing: separación máxima entre puntos, en el lanzamiento/aterrizaje.
     """
     h, w = tensor.shape
     oy, ox = origin
@@ -791,22 +641,15 @@ def draw_flyover_trajectory(
     progress_duration: float = 0.0,
 ) -> None:
     """
-    Dibuja una trayectoria en forma de arco abierto (medio lazo) que parte de
-    `start`, se eleva "sobrevolando" la nube de humo (el ápice queda más
-    lejos del origen que el propio borde del humo) y aterriza en otro punto,
-    a diferencia de draw_returning_parabola que cierra sobre el mismo punto
-    de partida. Simula un fragmento grande que vuela en un arco amplio por
-    encima de la explosión.
-    Es medio lazo (media elipse, barrido de pi) orientado para que el ápice
-    quede siempre del lado contrario al origen (hacia "afuera"/"arriba" de
-    la nube), nunca atravesando la explosión.
-    reach_range: fracción de min(h, w) usada como semi-eje mayor `a`
-    (separación horizontal entre despegue y aterrizaje).
-    aspect_range: relación b/a (altura del arco respecto al alcance) para que
-    el arco sea achatado tipo "arcoíris" en vez de un semicírculo cerrado.
-    height_factor_range: piso mínimo del semi-eje menor `b`, como múltiplo
-    del ancho de humo medido desde el origen hacia afuera, para asegurar que
-    el ápice quede por encima del borde del humo incluso si `a` sale chico.
+    Arco abierto (media elipse) que parte de `start`, sobrevuela la nube y
+    aterriza en otro punto — a diferencia de draw_returning_parabola, que cierra
+    sobre el de partida. El ápice queda siempre del lado contrario al origen,
+    así que nunca atraviesa la explosión.
+
+    reach_range: semi-eje mayor `a`, en fracción de min(h, w).
+    aspect_range: relación b/a, para que el arco salga achatado tipo arcoíris.
+    height_factor_range: piso de `b` en múltiplos del ancho de humo, para que el
+    ápice supere el borde de la pluma aunque `a` salga chico.
     """
     h, w = tensor.shape
     oy, ox = origin
@@ -974,24 +817,19 @@ def draw_straight_trajectories(
                          camouflage_scale, filament_region, progress_map, launch, duration)
 
 
-# Fracción mínima de trayectorias parabólicas que deben quedar mayormente
-# dentro del lienzo por imagen (está bien que varias se salgan del cuadro,
-# pero no todas) y umbral de "mayormente contenida" para cada una de ellas.
+# Está bien que varios lazos se salgan del cuadro, pero no todos.
 MIN_CONTAINED_FRACTION = 0.25                # fracción de parábolas forzadas a verse
 MIN_VISIBLE_FRACTION = 0.5                   # cuánto de su lazo tiene que entrar en el cuadro
 
-# Rango de max_spacing por trayectoria: valores bajos dan un punteado más
-# cercano/denso en todo el lazo; valores altos dan el punteado más disperso
-# de antes. Se sortea por trayectoria para tener variedad entre imágenes.
+# Se sortea por trayectoria para tener variedad entre imágenes.
 PARABOLA_MAX_SPACING_RANGE = (8, 25)         # separación máxima entre puntos del trazo, en px
 
 
 def _schedule_at(progress_schedule: list[tuple[float, float]] | None,
                  i: int) -> tuple[float, float]:
     """(lanzamiento, duración) de la i-ésima trayectoria del grupo. Sin
-    calendario (generación de una sola imagen) la duración es 0, que
-    _progress_window interpreta como "ocupa todo el tramo" — irrelevante de
-    todos modos, porque sin progress_map no se anota nada."""
+    calendario —generación de una sola imagen— la duración es 0, o sea todo el
+    tramo; irrelevante igual, porque sin progress_map no se anota nada."""
     if progress_schedule is None or i >= len(progress_schedule):
         return (0.0, 0.0)
     return progress_schedule[i]
@@ -1010,15 +848,8 @@ def draw_parabolic_trajectories(
     progress_map: np.ndarray | None = None,
     progress_schedule: list[tuple[float, float]] | None = None,
 ) -> None:
-    """
-    Genera múltiples trayectorias en forma de lazo/óvalo: cada una parte de
-    un centro cercano a la explosión, describe una elipse completa (semi-eje
-    mayor y menor aleatorios, pudiendo salir del lienzo) y cierra exactamente
-    sobre su punto de partida, simulando metralla que cae de regreso al punto
-    de impacto. Al menos MIN_CONTAINED_FRACTION de ellas quedan forzadas a
-    tener MIN_VISIBLE_FRACTION de su lazo dentro del cuadro; el resto es
-    libre y puede salirse del lienzo sin restricción.
-    """
+    """Lazos desde centros sorteados. Al menos MIN_CONTAINED_FRACTION quedan
+    forzados a tener MIN_VISIBLE_FRACTION dentro del cuadro; el resto es libre."""
     num_contained = max(1, round(num_trajectories * MIN_CONTAINED_FRACTION))
 
     for i in range(num_trajectories):
@@ -1091,10 +922,9 @@ def draw_trajectories(
 ) -> None:
     """Punto de entrada: dibuja trayectorias rectas, parabólicas y de sobrevuelo.
 
-    progress_schedule, si se pasa, trae un (lanzamiento, duración) por
-    trayectoria en el mismo orden en que se dibujan —primero las rectas, después
-    las parabólicas, al final los sobrevuelos— y se reparte entre los tres
-    grupos. Lo arma sequence.py; acá solo se distribuye."""
+    progress_schedule trae un (lanzamiento, duración) por trayectoria en el orden
+    en que se dibujan —rectas, parabólicas, sobrevuelos— y acá solo se reparte
+    entre los tres grupos. Lo arma sequence.py."""
     schedule = progress_schedule or []
     straight_r = schedule[:num_straight] or None
     parabolic_r = schedule[num_straight:num_straight + num_parabolic] or None

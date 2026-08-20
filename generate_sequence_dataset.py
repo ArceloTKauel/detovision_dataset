@@ -29,41 +29,36 @@ from main import HEIGHT, WIDTH
 from sequence import generate_explosion_sequence
 from export import tensor_to_image, mask_to_rgb
 
-# Secuencias, NO imágenes: cada una produce NUM_FRAMES_RANGE frames (90, fijo) y
-# de ahí salen 10 bloques. Lo que se mantiene alto a propósito es la variedad de
-# EXPLOSIONES, porque los frames de una misma secuencia están muy correlacionados
-# y aportan poco de a uno.
+# Secuencias, NO imágenes: cada una da 90 frames y de ahí salen 10 bloques. Lo que
+# se mantiene alto a propósito es la variedad de EXPLOSIONES, porque los frames de
+# una misma secuencia están muy correlacionados.
 #
-# A 44.3 KB por par: 3.000 secuencias son 270.000 pares y ~12 GB. Conviene medir
-# el tiempo por época antes de comprometerse a ese tamaño — 500 secuencias son
-# 45.000 pares y 2 GB, y alcanzan para saber si el formato sirve.
+# A 44.3 KB por par, 3.000 secuencias son 270.000 pares y ~12 GB. Conviene medir el
+# tiempo por época antes de comprometerse: 500 secuencias son 2 GB y alcanzan para
+# saber si el formato sirve.
 TOTAL_SEQUENCES = 3_000                      # explosiones; cada una da varios bloques
 DATASET_DIR = "dataset_sequences"            # carpeta de salida, con inputs/ y targets/
 
-# Frames que entran juntos como canales del tensor. NUM_FRAMES_RANGE en
-# sequence.py es múltiplo de esto a propósito, así que ninguna secuencia deja
-# frames colgando sin bloque.
+# NUM_FRAMES_RANGE en sequence.py es múltiplo de esto a propósito, así ninguna
+# secuencia deja frames colgando sin bloque.
 BLOCK_SIZE = 9                               # frames apilados como canales
 
-# Desfase entre la semilla de la explosión y la de su estructura temporal. Son
-# dos streams separados (ver generate_explosion_sequence): con el mismo índice
-# en ambos, dos secuencias distintas compartirían el sorteo temporal.
+# La explosión y su estructura temporal usan dos streams separados; con el mismo
+# índice en ambos, dos secuencias distintas compartirían el sorteo temporal.
 _TIME_SEED_OFFSET = 10_000_000               # separa el stream temporal del de la explosión
 
 
 def _block_union(block):
     """Máscara y heatmap del bloque: lo que muestran sus frames juntos.
 
-    Un píxel puede aparecer en más de un frame con clases distintas —una
-    trayectoria que pasa por donde antes hubo humo— y gana el más tardío, que es
-    el último evento que ocurrió ahí dentro del bloque. Por eso se copian mask y
-    heatmap juntos, ceros incluidos: el evento nuevo reemplaza al viejo entero.
+    Un píxel puede aparecer en varios frames con clases distintas —una trayectoria
+    sobre donde antes hubo humo— y gana el más tardío, el último evento del bloque.
+    Por eso mask y heatmap se copian juntos, ceros incluidos.
 
-    Un píxel cuenta como tocado si tiene mask O heatmap, no solo mask: mask_to_rgb
-    escribe la clase trayectoria desde `heatmap > 0`, y hay ~16.700 píxeles por
-    secuencia con heatmap sin mask. Filtrando solo por mask, esos quedaban como
-    fondo acá y como trayectoria en el target de imagen única — dos etiquetas
-    distintas para el mismo píxel según el formato.
+    Cuenta como tocado si tiene mask O heatmap: mask_to_rgb escribe la clase
+    trayectoria desde `heatmap > 0`, y hay ~16.700 píxeles por secuencia con
+    heatmap sin mask. Filtrando solo por mask, esos quedaban como fondo acá y como
+    trayectoria en el target de imagen única.
     """
     mask = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
     heatmap = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)

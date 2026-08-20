@@ -3,33 +3,17 @@ canvas.py - Lienzo y geometría base de la explosión.
 
 La zona de impacto es una FILA de pozos —la línea de tiro—, no un punto ni una
 región: la carga real de una voladura es lineal y por eso la pluma sale alargada
-sobre ella.
-
-Funciones:
-    - create_canvas(height, width): tensor 2D de ceros.
-    - generate_blast_line(height, width, rng, margin): polilínea con la fila de
-      pozos cargados.
-    - sample_on_line(line, count, rng): puntos sorteados sobre esa polilínea.
-    - distribute_centers_along_line(line, num_points, rng): reparte los centros
-      de fragmento a lo largo de la línea, con dispersión lateral.
-    - draw_center(tensor, center, size, rng, mask): dibuja un pozo, con brillo
-      por debajo del rango del núcleo de humo para que quede camuflado cuando
-      draw_smoke se dibuje encima.
+sobre ella, con cada punto emitiendo su propio abanico.
 """
 
 import numpy as np
 
 
 # ── Línea de tiro ──────────────────────────────────────────────────────────
-# En una voladura real la carga es una FILA de pozos a lo largo de un banco, no
-# un punto: la pluma sale alargada sobre esa línea y cada punto de ella emite su
-# propio abanico. Se ve explícito en las referencias reales
-# (detovision_segmentation/inference/inputs/mascara_cambios_final_sinbin_3.png,
-# donde la línea de tiro aparece como un trazo brillante, y la _13, que es una
-# hilera de bocanadas contiguas).
-#
-# Antes los centros se repartían dentro de un cuadrilátero, lo que daba un blob
-# redondeado: elongación medida 1.99 contra 3.42 de las referencias.
+# Se ve explícito en las referencias: mascara_cambios_final_sinbin_3.png, donde la
+# línea aparece como un trazo brillante, y la _13, una hilera de bocanadas
+# contiguas. Antes los centros se repartían dentro de un cuadrilátero, lo que daba
+# un blob redondeado: elongación 1.99 contra 3.42 de las referencias.
 BLAST_LINE_LENGTH_RATIO = (0.10, 0.28)       # fracción de min(alto, ancho)
 BLAST_LINE_BOW_RATIO    = (-0.12, 0.12)      # curvatura: los bancos no son rectos
 BLAST_LINE_JITTER_RATIO = 0.05               # dispersión lateral de los pozos
@@ -96,11 +80,9 @@ def create_canvas(height: int, width: int) -> np.ndarray:
     return np.zeros((height, width), dtype=np.uint8)
 
 
-# Rango de brillo de los cuadrados de centro: deliberadamente por debajo del
-# núcleo de humo (~217-255, ver smoke.py core_brightness) para que, una vez
-# que draw_smoke se dibuja encima (después, con np.maximum), el cuadrado
-# quede camuflado dentro de la textura del humo en vez de verse como un
-# parche plano y perfectamente cuadrado.
+# Deliberadamente por debajo del núcleo de humo (~217-255) para que, cuando
+# draw_smoke se dibuje encima con np.maximum, el cuadrado quede camuflado en la
+# textura en vez de verse como un parche plano y perfectamente cuadrado.
 _CENTER_BRIGHTNESS_RANGE = (120.0, 200.0)    # brillo del pozo, camuflado bajo el humo
 
 
@@ -112,12 +94,9 @@ def draw_center(
     mask: np.ndarray | None = None,
     brightness_scale: float = 1.0,
 ) -> None:
-    """Dibuja un cuadrado de lado (2*size+1) píxeles, con brillo variable por píxel.
-
-    brightness_scale: misma escala de brillo global sorteada para el humo
-    (ver smoke.py::sample_brightness_scale), para que el rango de camuflaje
-    siga quedando por debajo del núcleo de humo aunque este se oscurezca.
-    """
+    """Dibuja un pozo: un cuadrado de lado (2*size+1) con brillo variable por
+    píxel. brightness_scale es la misma escala global que usa el humo, para que el
+    camuflaje siga por debajo del núcleo aunque la explosión salga oscura."""
     h, w = tensor.shape
     cy, cx = center
     for dy in range(-size, size + 1):
