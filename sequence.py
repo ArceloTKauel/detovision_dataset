@@ -122,21 +122,34 @@ SMOKE_ARRIVAL_PROFILE = (0.21, 0.38, 0.24, 0.09, 0.05, 0.02, 0.01)  # reparto de
 # (un Perlin corriendo `frac` hasta ±0.35 del tramo). Indistinguible de no hacer
 # nada. Lo que sí resolvió los anillos concéntricos fue la turbulencia.
 
-# Turbulencia: un píxel de humo ya llegado vuelve a encenderse cada tanto, porque
-# la nube real no se apaga — sigue revolviéndose, y eso es lo que hace que EXISTA
-# dentro de un bloque. El dato que fija el diseño: nuestra máscara cubre 1-2.6%
-# del cuadro en un bloque y el real enciende 32-55% de sus píxeles por encima de
-# 25. No falta nube, falta que se encienda, y se enciende a RÁFAGAS (media por
-# canal baja, pico alto) — por eso _PROB es del orden de 1/9 y la amplitud alta.
-# El campo se resortea en cada frame: fijo volvería el problema del terreno estático.
+# Turbulencia: un píxel de humo ya llegado vuelve a encenderse cada tanto — la
+# nube real sigue revolviéndose. Target del ACUMULADO del bloque (commit
+# f1a2c89, tabla sobre la huella de humo, no el cuadro entero): nuestra máscara
+# cubre 1-2.6% del cuadro en un bloque, el real enciende 32-55% de su huella
+# por encima de 25.
+#
+# La FORMA temporal faltaba: medido frame a frame (no por bloque) sobre
+# blocks_outputs crudo, más del 60% de los frames reales no tiene ningún píxel
+# de señal — la actividad se concentra en ráfagas raras, no en un rumor parejo.
+# _FRAME_PROB gatilla si ESTE frame tiene ráfaga en vez de sortear cada píxel
+# independiente en los 9 del bloque (daba actividad pareja, nunca un frame en
+# cero); _PROB sube para no mover el acumulado: 1-(1-0.377)^3 ≈ 1-(1-0.14)^9.
 #
 # OJO al recalibrar: las referencias de detovision_segmentation tienen ganancia
-# x10 saturada en 255 y contra ellas se concluye lo contrario (subir a 0.60 nos
-# dejó 16-100x más brillantes que el real). Las crudas, que son las que valen,
-# están en Desktop/video_diff_heatmap_blocks_outputs.
-SMOKE_TURBULENCE_PROB = 0.14                 # fracción de nube que se reenciende por frame
+# x10 saturada en 255 (subir a 0.60 dio 16-100x más brillante que el real). Las
+# crudas están en Desktop/video_diff_heatmap_blocks_outputs.
+SMOKE_TURBULENCE_FRAME_PROB = 0.33           # fracción de FRAMES con alguna ráfaga
+SMOKE_TURBULENCE_PROB = 0.377                # fracción de nube que se reenciende, en un frame con ráfaga
 SMOKE_TURBULENCE_AMPLITUDE = (0.35, 1.0)     # con qué fuerza, en fracción de su valor
 SMOKE_TURBULENCE_CELL = 16                   # tamaño de la mancha de ráfaga, en px
+
+# Tope de píxeles de humo NUEVOS por frame, compartido entre llegada y ráfaga
+# (alimentan el mismo canal): sin esto, un anillo entero de `smoke_order` nace
+# junto y una ráfaga activa reenciende toda la nube ya llegada de una vez. El
+# sobrante se difiere a los frames siguientes (`_rate_limit_births`), no se
+# pierde. Piso de capacidad: por debajo de total_humo/tramo (~220 con una
+# pluma típica de 16 000px y tramo ~75) la nube no terminaría de llegar.
+MAX_NEW_SMOKE_PX_PER_FRAME = 250
 
 # El piso no es 0 porque en las referencias las trayectorias aparecen 1-2 imágenes
 # DESPUÉS del humo, nunca junto con el fogonazo.
@@ -151,6 +164,21 @@ TRAJECTORY_DURATION_RANGE = (0.30, 0.55)     # tiempo de vuelo, en fracción del
 # su propio rng, después de que acá ya haya que tenerlos listos.
 _MAX_TRAJECTORIES = 70                       # cota superior: main.py sortea menos
 
+# Tope de píxeles NUEVOS por frame para UNA trayectoria (no compartido entre
+# varias, a diferencia del humo). Tasa natural = largo/duración: un lazo (p50
+# 1080px) da ~34 px/frame, una recta (p50 264px) ~8. Por debajo del tope,
+# `_progress_window` (trajectories.py) estira la duración de ESA trayectoria
+# — no toca main.py ni el balance de clase en imagen única, a diferencia de
+# bajar la cantidad. Mismo costo que el humo: estira más allá de lo que valida
+# TRAJECTORY_DURATION_RANGE.
+#
+# Medido sobre 965 trayectorias (20 semillas): tasa natural mediana 21 px/frame,
+# p90 115, máx 187. Por debajo de cierto tope la ventana estirada no entra en
+# el tramo y la trayectoria queda TRUNCADA (incompleta, no solo más lenta):
+# 0% en 80, 2% en 60 — aceptado a cambio de bajar el pico un 8% más (662
+# contra 731 px/frame, semilla de prueba).
+MAX_TRAJECTORY_PX_PER_FRAME = 60
+
 
 def _distance_to_blast_line(blast_line: np.ndarray, h: int, w: int) -> np.ndarray:
     """Distancia de cada píxel al punto más cercano de la línea de tiro.
@@ -164,6 +192,52 @@ def _distance_to_blast_line(blast_line: np.ndarray, h: int, w: int) -> np.ndarra
     for py, px in blast_line:
         np.minimum(dist, np.hypot(yy - py, xx - px), out=dist)
     return dist
+
+
+def _rate_limit_births(births: list[np.ndarray], cap: int, last: int) -> list[np.ndarray]:
+    """Reparte los nacimientos finitos de una o más capas para que, sumados,
+    ningún frame reciba más de `cap` píxeles nuevos: el sobrante se difiere a
+    los frames siguientes sin adelantar a nadie ni cambiar el orden natural
+    (por eso el sort es estable). Comparten presupuesto porque las capas de la
+    lista son la misma clase (smoke + filaments = humo).
+
+    Se acota a `last`: sin esto, una pluma más grande que cap*tramo dejaría
+    píxeles con nacimiento después del último frame, y el modo acumulado
+    (ver el docstring del módulo) perdería la equivalencia bit a bit con
+    generate_explosion en su frame final."""
+    values_list, layer_id_list, flat_idx_list = [], [], []
+    for li, b in enumerate(births):
+        idx = np.flatnonzero(np.isfinite(b))
+        if idx.size == 0:
+            continue
+        values_list.append(b.reshape(-1)[idx])
+        layer_id_list.append(np.full(idx.shape, li))
+        flat_idx_list.append(idx)
+    if not values_list:
+        return births
+
+    values = np.concatenate(values_list)
+    layer_id = np.concatenate(layer_id_list)
+    flat_idx = np.concatenate(flat_idx_list)
+    order = np.argsort(values, kind="stable")
+    values, layer_id, flat_idx = values[order], layer_id[order], flat_idx[order]
+
+    desired = np.minimum(np.ceil(values), last).astype(np.int64)
+    assigned = np.empty(values.size, dtype=np.float32)
+    n = values.size
+    t, i = desired[0], 0
+    while i < n:
+        t = min(max(t, desired[i]), last)
+        j = min(i + cap, n)
+        assigned[i:j] = t
+        i = j
+        t += 1
+
+    out = [b.copy() for b in births]
+    for li in range(len(births)):
+        sel = layer_id == li
+        out[li].reshape(-1)[flat_idx[sel]] = assigned[sel]
+    return out
 
 
 class _StageRecorder:
@@ -272,6 +346,13 @@ class _StageRecorder:
 
             layers.append((s["name"], birth.astype(np.float32),
                            s["tensor"], s["mask"], s["heatmap"]))
+
+        smoke_idx = [i for i, l in enumerate(layers) if l[0] in ("smoke", "filaments")]
+        if smoke_idx:
+            capped = _rate_limit_births([layers[i][1] for i in smoke_idx],
+                                         MAX_NEW_SMOKE_PX_PER_FRAME, self.last)
+            for i, birth in zip(smoke_idx, capped):
+                layers[i] = (layers[i][0], birth, *layers[i][2:])
         return layers
 
 
@@ -397,6 +478,7 @@ def generate_explosion_sequence(
 
     progress_map = np.full((height, width), np.inf, dtype=np.float32)
     recorder = _StageRecorder(ignition, last)
+    span = max(last - ignition, 1)
 
     generate_explosion(
         height, width, rng,
@@ -404,6 +486,7 @@ def generate_explosion_sequence(
             stage, t, m, hm, {**ctx, "progress_map": progress_map}),
         progress_map=progress_map,
         progress_schedule=_sample_progress_schedule(time_rng),
+        progress_rate_limit=1.0 / (MAX_TRAJECTORY_PX_PER_FRAME * span),
     )
 
     # La deriva se sortea siempre, aunque el modo acumulado no la use: así los
@@ -440,11 +523,22 @@ def generate_explosion_sequence(
             # Turbulencia: lo que ya llegó vuelve a encenderse a ráfagas. Va
             # ANTES del bucle de llegada para que, si un píxel está llegando y
             # además le toca ráfaga, gane la llegada — que es el evento nuevo.
+            #
+            # _FRAME_PROB decide si ESTE frame tiene ráfaga: sin esto, sortear
+            # independiente en los 9 frames de un bloque da actividad pareja en
+            # los 9 (nunca un frame en cero), y lo real es lo opuesto — ver la
+            # nota junto a la constante.
             if name in ("smoke", "filaments"):
                 llegado = np.isfinite(birth) & (birth <= t - len(perfil))
-                if llegado.any():
+                if llegado.any() and time_rng.random() < SMOKE_TURBULENCE_FRAME_PROB:
                     rafaga = _burst_field(height, width, time_rng)
                     sel = llegado & (rafaga > 1.0 - SMOKE_TURBULENCE_PROB)
+                    # Mismo tope que la llegada, ver MAX_NEW_SMOKE_PX_PER_FRAME.
+                    sel_idx = np.flatnonzero(sel)
+                    if sel_idx.size > MAX_NEW_SMOKE_PX_PER_FRAME:
+                        keep = time_rng.choice(sel_idx, MAX_NEW_SMOKE_PX_PER_FRAME, replace=False)
+                        sel = np.zeros_like(sel)
+                        sel.reshape(-1)[keep] = True
                     lo, hi = SMOKE_TURBULENCE_AMPLITUDE
                     # la amplitud sigue al campo: el centro de una ráfaga pega
                     # más fuerte que su borde

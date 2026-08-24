@@ -252,7 +252,7 @@ def _paint_traj_mask(mask: np.ndarray, py: int, px: int, h: int, w: int,
 _PROGRESS_RADIUS = 1                         # vecindad que se fecha al anotar el progreso
 
 
-def _progress_window(launch: float, duration: float) -> tuple[float, float]:
+def _progress_window(launch: float, duration: float, min_duration: float = 0.0) -> tuple[float, float]:
     """Ventana temporal de una trayectoria: cuándo se lanza y cuándo termina de
     recorrerse, como fracción del tramo post-ignición. Con duración 0 ocupa todo
     el tramo, que es el caso de la generación de una sola imagen.
@@ -264,6 +264,11 @@ def _progress_window(launch: float, duration: float) -> tuple[float, float]:
     lejos van más rápido. Atarla al largo hacía que los recorridos cortos
     aparecieran completos de golpe entre dos frames.
 
+    min_duration ensancha la ventana cuando hace falta para no superar el tope
+    de píxeles nuevos por frame (ver MAX_TRAJECTORY_PX_PER_FRAME en sequence.py):
+    solo actúa sobre las trayectorias cuyo largo/duración natural excede ese
+    tope — la mayoría, más lentas, no la tocan.
+
     El lanzamiento se adelanta si con el sorteado la trayectoria no alcanzaría a
     completarse: un pedazo de recorrido que ningún frame muestra rompería la
     equivalencia entre la unión de la secuencia y la imagen sin tiempo, que es la
@@ -271,7 +276,7 @@ def _progress_window(launch: float, duration: float) -> tuple[float, float]:
     """
     if duration <= 0:
         return (0.0, 1.0)
-    duration = min(duration, 1.0)
+    duration = min(max(duration, min_duration), 1.0)
     launch = min(max(launch, 0.0), 1.0 - duration)
     return (launch, launch + duration)
 
@@ -337,6 +342,7 @@ def draw_trajectory(
     progress_map: np.ndarray | None = None,
     progress_launch: float = 0.0,
     progress_duration: float = 0.0,
+    progress_rate_limit: float | None = None,
 ) -> None:
     """
     Trayectoria recta punteada desde center en la dirección angle.
@@ -346,6 +352,7 @@ def draw_trajectory(
     camouflage_scale: atenuación sobre los píxeles que caen en humo.
     progress_map: si se pasa, anota en qué punto del recorrido se alcanza cada
     píxel. No altera el dibujo ni consume rng.
+    progress_rate_limit: ver MAX_TRAJECTORY_PX_PER_FRAME en sequence.py.
     """
     h, w = tensor.shape
     cy, cx = center
@@ -372,7 +379,8 @@ def draw_trajectory(
     inked = []
     max_spacing = 50
     max_dist = length if length > 0 else 1
-    prog_lo, prog_hi = _progress_window(progress_launch, progress_duration)
+    min_duration = total_len * progress_rate_limit if progress_rate_limit else 0.0
+    prog_lo, prog_hi = _progress_window(progress_launch, progress_duration, min_duration)
 
     for idx, (py, px) in enumerate(points):
         if progress_map is not None:
@@ -485,6 +493,7 @@ def draw_returning_parabola(
     progress_map: np.ndarray | None = None,
     progress_launch: float = 0.0,
     progress_duration: float = 0.0,
+    progress_rate_limit: float | None = None,
 ) -> None:
     """
     Lazo que parte de `start` (dentro de la nube), describe una elipse completa
@@ -537,7 +546,8 @@ def draw_returning_parabola(
     inked = []
 
     max_dist = 2 * a if a > 0 else 1  # distancia del punto más lejano del lazo a `start`
-    prog_lo, prog_hi = _progress_window(progress_launch, progress_duration)
+    min_duration = total_len * progress_rate_limit if progress_rate_limit else 0.0
+    prog_lo, prog_hi = _progress_window(progress_launch, progress_duration, min_duration)
 
     for i in range(num_steps + 1):
         progress = i / num_steps
@@ -639,6 +649,7 @@ def draw_flyover_trajectory(
     progress_map: np.ndarray | None = None,
     progress_launch: float = 0.0,
     progress_duration: float = 0.0,
+    progress_rate_limit: float | None = None,
 ) -> None:
     """
     Arco abierto (media elipse) que parte de `start`, sobrevuela la nube y
@@ -695,7 +706,8 @@ def draw_flyover_trajectory(
     erase_remaining = 0
     grace_remaining = 0
     inked = []
-    prog_lo, prog_hi = _progress_window(progress_launch, progress_duration)
+    min_duration = total_len * progress_rate_limit if progress_rate_limit else 0.0
+    prog_lo, prog_hi = _progress_window(progress_launch, progress_duration, min_duration)
 
     for i in range(num_steps + 1):
         progress = i / num_steps
@@ -790,6 +802,7 @@ def draw_straight_trajectories(
     filament_region: np.ndarray | None = None,
     progress_map: np.ndarray | None = None,
     progress_schedule: list[tuple[float, float]] | None = None,
+    progress_rate_limit: float | None = None,
 ) -> None:
     """Genera múltiples trayectorias rectas desde centros aleatorios."""
     h, w = tensor.shape
@@ -814,7 +827,7 @@ def draw_straight_trajectories(
             frac_lo, frac_hi = 0.0, 0.0
         launch, duration = _schedule_at(progress_schedule, i)
         draw_trajectory(tensor, center, angle, length, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap,
-                         camouflage_scale, filament_region, progress_map, launch, duration)
+                         camouflage_scale, filament_region, progress_map, launch, duration, progress_rate_limit)
 
 
 # Está bien que varios lazos se salgan del cuadro, pero no todos.
@@ -847,6 +860,7 @@ def draw_parabolic_trajectories(
     filament_region: np.ndarray | None = None,
     progress_map: np.ndarray | None = None,
     progress_schedule: list[tuple[float, float]] | None = None,
+    progress_rate_limit: float | None = None,
 ) -> None:
     """Lazos desde centros sorteados. Al menos MIN_CONTAINED_FRACTION quedan
     forzados a tener MIN_VISIBLE_FRACTION dentro del cuadro; el resto es libre."""
@@ -869,7 +883,8 @@ def draw_parabolic_trajectories(
         draw_returning_parabola(tensor, start, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap,
                                  min_visible, max_spacing=max_spacing, camouflage_scale=camouflage_scale,
                                  filament_region=filament_region, progress_map=progress_map,
-                                 progress_launch=launch, progress_duration=duration)
+                                 progress_launch=launch, progress_duration=duration,
+                                 progress_rate_limit=progress_rate_limit)
 
 
 def draw_flyover_trajectories(
@@ -884,6 +899,7 @@ def draw_flyover_trajectories(
     filament_region: np.ndarray | None = None,
     progress_map: np.ndarray | None = None,
     progress_schedule: list[tuple[float, float]] | None = None,
+    progress_rate_limit: float | None = None,
 ) -> None:
     """Genera trayectorias de arco abierto que sobrevuelan la nube de humo."""
     for i in range(num_trajectories):
@@ -902,7 +918,8 @@ def draw_flyover_trajectories(
         draw_flyover_trajectory(tensor, start, origin, rng, mask, erase_prob, (frac_lo, frac_hi), heatmap,
                                  max_spacing=max_spacing, camouflage_scale=camouflage_scale,
                                  filament_region=filament_region, progress_map=progress_map,
-                                 progress_launch=launch, progress_duration=duration)
+                                 progress_launch=launch, progress_duration=duration,
+                                 progress_rate_limit=progress_rate_limit)
 
 
 def draw_trajectories(
@@ -919,20 +936,22 @@ def draw_trajectories(
     filament_region: np.ndarray | None = None,
     progress_map: np.ndarray | None = None,
     progress_schedule: list[tuple[float, float]] | None = None,
+    progress_rate_limit: float | None = None,
 ) -> None:
     """Punto de entrada: dibuja trayectorias rectas, parabólicas y de sobrevuelo.
 
     progress_schedule trae un (lanzamiento, duración) por trayectoria en el orden
     en que se dibujan —rectas, parabólicas, sobrevuelos— y acá solo se reparte
-    entre los tres grupos. Lo arma sequence.py."""
+    entre los tres grupos. Lo arma sequence.py. progress_rate_limit viaja igual,
+    sin repartirse: es un tope por frame, no por trayectoria."""
     schedule = progress_schedule or []
     straight_r = schedule[:num_straight] or None
     parabolic_r = schedule[num_straight:num_straight + num_parabolic] or None
     flyover_r = schedule[num_straight + num_parabolic:] or None
 
     draw_straight_trajectories(tensor, centers, origin, num_straight, rng, mask, heatmap, camouflage_scale,
-                                filament_region, progress_map, straight_r)
+                                filament_region, progress_map, straight_r, progress_rate_limit)
     draw_parabolic_trajectories(tensor, centers, origin, num_parabolic, rng, mask, heatmap, camouflage_scale,
-                                 filament_region, progress_map, parabolic_r)
+                                 filament_region, progress_map, parabolic_r, progress_rate_limit)
     draw_flyover_trajectories(tensor, centers, origin, num_flyover, rng, mask, heatmap, camouflage_scale,
-                               filament_region, progress_map, flyover_r)
+                               filament_region, progress_map, flyover_r, progress_rate_limit)

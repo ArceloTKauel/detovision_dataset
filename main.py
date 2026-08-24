@@ -50,12 +50,14 @@ def generate_explosion(
     observer=None,
     progress_map: np.ndarray | None = None,
     progress_schedule: list[tuple[float, float]] | None = None,
+    progress_rate_limit: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Retorna (tensor B/W, mask categórica, heatmap de trayectoria).
 
-    observer, progress_map y progress_schedule son los ganchos de la generación
-    temporal (ver sequence.py) y no alteran la imagen: con los tres en None el
-    resultado es idéntico bit a bit y con el mismo consumo de rng.
+    observer, progress_map, progress_schedule y progress_rate_limit son los
+    ganchos de la generación temporal (ver sequence.py) y no alteran la imagen:
+    con los cuatro en None el resultado es idéntico bit a bit y con el mismo
+    consumo de rng.
 
     observer(stage, tensor, mask, heatmap, ctx) se llama después de cada etapa, con
     el estado acumulado y la geometría que esa etapa necesita para fechar sus
@@ -136,7 +138,8 @@ def generate_explosion(
     num_flyover = rng.integers(*NUM_FLYOVER_RANGE)
     draw_trajectories(tensor, centers, origin, num_straight, num_parabolic, rng, mask, heatmap, num_flyover,
                        camouflage_scale=brightness_scale, filament_region=filament_region,
-                       progress_map=progress_map, progress_schedule=progress_schedule)
+                       progress_map=progress_map, progress_schedule=progress_schedule,
+                       progress_rate_limit=progress_rate_limit)
     notify("trajectories", num_trajectories=num_straight + num_parabolic + num_flyover)
 
     # Derrumbe: franjas independientes de la explosión, en ~40% de las imágenes.
