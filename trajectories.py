@@ -61,10 +61,26 @@ def _trajectory_brightness(rng: np.random.Generator, mean: float) -> int:
     return int(value)
 
 
-# Ancho del trazo, sorteado una vez por trayectoria y no por píxel: fragmentos de
-# distinto grosor. Cada valor define un bloque de offsets centrado en el punto.
+# Ancho del trazo en la ENTRADA, sorteado una vez por trayectoria y no por píxel.
+# Cada valor define un bloque de offsets; ojo que el 2 NO queda centrado (se corre
+# arriba-izquierda), solo el 1 y el 3 lo están.
+#
+# Los anchos 2 y 3 quedaron en 0 el 2026-08-25: eran el 14% y el 3% de las
+# trayectorias pero producían el 10.7% y el 34.6% de los blobs de 4+ px que se
+# ven en un frame de la secuencia. Forzando todo a 1 px, los blobs de 4+ px
+# bajan de 2.3% a 0.4% y el máximo de 11 px a 6.
+#
+# El sorteo se conserva aunque el resultado sea fijo: consume el mismo rng, así
+# que el resto de la explosión (humo, terreno, geometría) no se mueve y las
+# semillas siguen comparables contra el dataset anterior.
+#
+# NO toca la salida, y está verificado sobre 12 semillas: el heatmap y la máscara
+# categórica salen idénticos, porque el gradiente se estampa en la POSICIÓN del
+# recorrido y nunca sobre el bloque de ancho. Los tres anchos son constantes
+# independientes: _WIDTH_OFFSETS (entrada), _MASK_OFFSETS (clase) y
+# _HEATMAP_KERNEL_SIZE (gradiente).
 _TRAJECTORY_WIDTH_VALUES = (1, 2, 3)         # grosor del trazo, en px
-_TRAJECTORY_WIDTH_PROBS = (0.85, 0.12, 0.03)  # casi todas de 1 px
+_TRAJECTORY_WIDTH_PROBS = (1.0, 0.0, 0.0)    # solo 1 px (ver arriba)
 _WIDTH_OFFSETS = {
     1: (0,),
     2: (-1, 0),
@@ -252,36 +268,105 @@ def _paint_traj_mask(mask: np.ndarray, py: int, px: int, h: int, w: int,
 _PROGRESS_RADIUS = 1                         # vecindad que se fecha al anotar el progreso
 
 
-def _progress_window(launch: float, duration: float, min_duration: float = 0.0) -> tuple[float, float]:
-    """Ventana temporal de una trayectoria: cuándo se lanza y cuándo termina de
-    recorrerse, como fracción del tramo post-ignición. Con duración 0 ocupa todo
-    el tramo, que es el caso de la generación de una sola imagen.
+def _stamp_progress_ranked(
+    progress_map: np.ndarray | None,
+    inked: list[tuple[int, int]],
+    launch: float,
+    duration: float,
+    rate_limit: float | None,
+) -> None:
+    """Fecha los puntos de la trayectoria por su ORDEN en el recorrido: el
+    k-ésimo punto CON TINTA avanza `paso` respecto del anterior.
 
-    La duración NO depende del largo del recorrido, y eso está medido: dos arcos
-    que difieren en un orden de magnitud (Video 4 f480→f660 y Video 3 f600→f780)
-    tardan los mismos 3 pasos de un tramo de ~7. Tiene sentido físico — los
-    fragmentos salen juntos y caen con la misma gravedad; los que llegan más
-    lejos van más rápido. Atarla al largo hacía que los recorridos cortos
-    aparecieran completos de golpe entre dos frames.
+    Que la vara sea la tinta y no la posición del recorrido es el punto. El
+    spacing del punteado colapsa a 1 en parte de cada trayectoria (cerca del
+    origen en las rectas, en el ápice en los lazos), y ahí el trazo es sólido:
+    contar posiciones dejaba entrar 22-35 píxeles con tinta en un mismo frame
+    aunque el tope dijera 35 "px". Contando tinta, el tope se cumple sea cual
+    sea la geometría — un tramo sólido y uno punteado avanzan igual de despacio.
 
-    min_duration ensancha la ventana cuando hace falta para no superar el tope
-    de píxeles nuevos por frame (ver MAX_TRAJECTORY_PX_PER_FRAME en sequence.py):
-    solo actúa sobre las trayectorias cuyo largo/duración natural excede ese
-    tope — la mayoría, más lentas, no la tocan.
+    Se llama DESPUÉS del bucle de dibujo y solo sobre `inked`, no sobre el
+    recorrido entero: una posición sin tinta no escribe tensor, máscara ni
+    heatmap, así que no tiene nada que fechar. El radio de _stamp_progress
+    cubre la huella completa de un punto (bloque de ancho, offsets de máscara y
+    kernel 3x3 del heatmap).
+
+    `paso` sale de la duración sorteada, salvo que eso supere el tope de tinta
+    por frame (ver MAX_TRAJECTORY_PX_PER_FRAME en sequence.py). La duración
+    sorteada NO depende del largo, y eso está medido: dos arcos que difieren en
+    un orden de magnitud tardan los mismos 3 pasos de un tramo de ~7. El tope
+    rompe esa independencia a propósito y solo donde hace falta: las
+    trayectorias con poca tinta conservan su duración sorteada, las densas se
+    estiran hasta cumplirlo.
 
     El lanzamiento se adelanta si con el sorteado la trayectoria no alcanzaría a
-    completarse: un pedazo de recorrido que ningún frame muestra rompería la
-    equivalencia entre la unión de la secuencia y la imagen sin tiempo, que es la
-    propiedad sobre la que se apoya todo sequence.py.
+    completarse, y si ni adelantándolo entra, el paso se COMPRIME hasta que
+    entre: esa trayectoria supera el tope, pero se recorre entera. Es
+    deliberado. Truncarla dejaría un pedazo que ningún frame muestra, y eso
+    rompe la equivalencia entre la unión de la secuencia y la imagen sin
+    tiempo, que es la propiedad sobre la que se apoya todo sequence.py.
+    Recortar el progreso contra 1.0 tampoco sirve: amontona todo el sobrante en
+    el último frame, que es justo el segmento largo que el tope viene a evitar
+    (medido: picos de 2.000 px en un frame y segmentos de 324 px).
     """
-    if duration <= 0:
-        return (0.0, 1.0)
-    duration = min(max(duration, min_duration), 1.0)
-    launch = min(max(launch, 0.0), 1.0 - duration)
-    return (launch, launch + duration)
+    if progress_map is None or not inked:
+        return
+
+    # Un píxel repetido no estrena nada, así que no puede gastar un lugar en la
+    # cuenta: el tope es de PÍXELES por frame, no de entradas de la lista. Los
+    # lazos y los arcos repiten el 21% y el 10% de sus entradas —su bucle llama
+    # a bresenham(prev, actual), que devuelve los DOS extremos, así que cada
+    # unión entre pasos de la parametrización se emite dos veces, y el redondeo
+    # a veces deja el punto donde estaba. Las rectas no repiten ninguna (un solo
+    # bresenham para todo el recorrido), por eso el problema se veía solo en las
+    # curvas.
+    #
+    # Se deduplica acá y no en el bucle de dibujo a propósito: sacar la repetida
+    # de raíz cambiaría la imagen única, porque ese píxel se repinta con un
+    # brillo nuevo sorteado y correría el rng.
+    inked = list(dict.fromkeys(inked))
+
+    paso = duration / len(inked) if duration > 0 else 0.0
+    if rate_limit:
+        # ESTRICTAMENTE mayor que el tope, no igual. Con el paso exactamente en
+        # 1/tope de frame los puntos caen sobre el borde del frame: en
+        # aritmética exacta eso da justo `tope` por frame, pero el error de
+        # punto flotante acumulado sobre cientos de puntos empuja algunos un
+        # pelo hacia atrás y entra uno de más. Medido con el tope en 2: 136 de
+        # 965 trayectorias estrenaban 3 puntos en un frame SIN estar
+        # comprimidas, todas con separación exacta de 0.5000 frames. El margen
+        # saca al paso de ese borde y no mueve la tasa de forma apreciable.
+        paso = max(paso, rate_limit * (1.0 + 1e-6))
+    if paso <= 0.0:
+        # Sin calendario —generación de una sola imagen— ocupa todo el tramo.
+        paso = 1.0 / len(inked)
+
+    tramos = max(len(inked) - 1, 1)
+    lo = min(max(launch, 0.0), max(0.0, 1.0 - paso * tramos))
+    paso = min(paso, (1.0 - lo) / tramos)
+
+    # DOS PASADAS, y el orden importa. _stamp_progress fecha un vecindario de
+    # 3x3 —hace falta para cubrir la huella de un punto: bloque de ancho,
+    # offsets de máscara y kernel del heatmap— quedándose con la fecha más
+    # temprana. En un tramo sólido eso hacía que la huella del punto k fechara
+    # el CENTRO del punto k+1, que heredaba la fecha de k y salía en el mismo
+    # frame: el 12.5% de los grupos tenía 3 o más puntos en un frame, contra
+    # 2.3% midiendo con radio 0 (que no sirve como arreglo — deja la huella sin
+    # fechar y esos píxeles no aparecen en ningún frame).
+    #
+    # 1) la huella, salteando los píxeles que son centro de ESTA trayectoria.
+    centros = set(inked)
+    for k, (py, px) in enumerate(inked):
+        _stamp_progress(progress_map, py, px, lo + k * paso, skip=centros)
+    # 2) los centros, cada uno con su propia fecha.
+    for k, (py, px) in enumerate(inked):
+        valor = lo + k * paso
+        if valor < progress_map[py, px]:
+            progress_map[py, px] = valor
 
 
-def _stamp_progress(progress_map: np.ndarray, py: int, px: int, value: float) -> None:
+def _stamp_progress(progress_map: np.ndarray, py: int, px: int, value: float,
+                    skip: set[tuple[int, int]] | None = None) -> None:
     """Registra en qué momento del recorrido se alcanza cada píxel, quedándose
     con el más temprano. Es lo que permite armar la secuencia retrocediendo (ver
     sequence.py) sin volver a dibujar la explosión.
@@ -294,10 +379,15 @@ def _stamp_progress(progress_map: np.ndarray, py: int, px: int, value: float) ->
     trayectorias se cruzan la segunda pasada no se registra y el guion puede
     quedar con un hueco de pocos píxeles. No se pierde tinta (la unión de las
     ventanas cubre exactamente el acumulado, verificado).
+
+    `skip` excluye píxeles del vecindario. Lo usa _stamp_progress_ranked para
+    que la huella de un punto no le gane la fecha al centro del punto vecino.
     """
     h, w = progress_map.shape
     for ny in range(max(py - _PROGRESS_RADIUS, 0), min(py + _PROGRESS_RADIUS + 1, h)):
         for nx in range(max(px - _PROGRESS_RADIUS, 0), min(px + _PROGRESS_RADIUS + 1, w)):
+            if skip is not None and (ny, nx) in skip:
+                continue
             if value < progress_map[ny, nx]:
                 progress_map[ny, nx] = value
 
@@ -379,14 +469,8 @@ def draw_trajectory(
     inked = []
     max_spacing = 50
     max_dist = length if length > 0 else 1
-    min_duration = total_len * progress_rate_limit if progress_rate_limit else 0.0
-    prog_lo, prog_hi = _progress_window(progress_launch, progress_duration, min_duration)
 
-    for idx, (py, px) in enumerate(points):
-        if progress_map is not None:
-            _stamp_progress(progress_map, py, px,
-                            prog_lo + (prog_hi - prog_lo) * (idx / total_len))
-
+    for py, px in points:
         if _paint_over_filaments(tensor, py, px, rng, brightness_mean, mask,
                                   camouflage_scale, override_contrast, filament_region):
             inked.append((py, px))
@@ -436,6 +520,9 @@ def draw_trajectory(
                 pixels_since_draw = 0
         else:
             pixels_since_draw += 1
+
+    _stamp_progress_ranked(progress_map, inked, progress_launch,
+                           progress_duration, progress_rate_limit)
 
     # Etiqueta: solo donde cayó tinta. Marcarla sobre el recorrido entero dejaba
     # el 85% de la clase sin nada visible, y en un frame de secuencia el 43% de
@@ -546,8 +633,6 @@ def draw_returning_parabola(
     inked = []
 
     max_dist = 2 * a if a > 0 else 1  # distancia del punto más lejano del lazo a `start`
-    min_duration = total_len * progress_rate_limit if progress_rate_limit else 0.0
-    prog_lo, prog_hi = _progress_window(progress_launch, progress_duration, min_duration)
 
     for i in range(num_steps + 1):
         progress = i / num_steps
@@ -564,10 +649,6 @@ def draw_returning_parabola(
             segment = [(py, px)]
 
         for spy, spx in segment:
-            if progress_map is not None:
-                _stamp_progress(progress_map, spy, spx,
-                                prog_lo + (prog_hi - prog_lo) * progress)
-
             if _paint_over_filaments(tensor, spy, spx, rng, brightness_mean, mask,
                                       camouflage_scale, override_contrast, filament_region):
                 inked.append((spy, spx))
@@ -620,6 +701,9 @@ def draw_returning_parabola(
                 pixels_since_draw += 1
 
         prev_py, prev_px = py, px
+
+    _stamp_progress_ranked(progress_map, inked, progress_launch,
+                           progress_duration, progress_rate_limit)
 
     # Etiqueta: solo donde cayó tinta (ver draw_trajectory).
     if mask is not None:
@@ -706,8 +790,6 @@ def draw_flyover_trajectory(
     erase_remaining = 0
     grace_remaining = 0
     inked = []
-    min_duration = total_len * progress_rate_limit if progress_rate_limit else 0.0
-    prog_lo, prog_hi = _progress_window(progress_launch, progress_duration, min_duration)
 
     for i in range(num_steps + 1):
         progress = i / num_steps
@@ -724,10 +806,6 @@ def draw_flyover_trajectory(
             segment = [(py, px)]
 
         for spy, spx in segment:
-            if progress_map is not None:
-                _stamp_progress(progress_map, spy, spx,
-                                prog_lo + (prog_hi - prog_lo) * progress)
-
             if _paint_over_filaments(tensor, spy, spx, rng, brightness_mean, mask,
                                       camouflage_scale, override_contrast, filament_region):
                 inked.append((spy, spx))
@@ -779,6 +857,9 @@ def draw_flyover_trajectory(
                 pixels_since_draw += 1
 
         prev_py, prev_px = py, px
+
+    _stamp_progress_ranked(progress_map, inked, progress_launch,
+                           progress_duration, progress_rate_limit)
 
     # Etiqueta: solo donde cayó tinta (ver draw_trajectory).
     if mask is not None:

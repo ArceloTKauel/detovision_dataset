@@ -43,10 +43,15 @@ PREVIEW_DIR = "sequence"                     # frames de la vista previa
 PREVIEW_MASK_DIR = "sequence_mask"           # sus máscaras
 
 # Fijo y múltiplo de los 9 frames que entran juntos como canales, así ninguna
-# secuencia deja frames colgando sin bloque. El precio: repartir una explosión
-# entre 90 ventanas deja cada frame en ~0.1% de trayectoria y de humo. Si hace
-# falta densidad por bloque, la palanca es la cantidad de trayectorias en main.py.
-NUM_FRAMES_RANGE = (90, 90)                  # largo de la secuencia, múltiplo de BLOCK_SIZE
+# secuencia deja frames colgando sin bloque. Subido de 90 a 180 (2026-08-24):
+# con 90, el promedio de trayectoria por frame (total/tramo) no bajaba del
+# tope de MAX_TRAJECTORY_PX_PER_FRAME por más que se ajustara la tasa — es
+# aritmética, no calibración. Al doble de frames el mismo total se reparte más
+# fino, sin tocar main.py ni el balance de clase en imagen única. El precio es
+# el dataset: el doble de bloques por secuencia si TOTAL_SEQUENCES no baja a
+# la par (ver generate_sequence_dataset.py), y más correlación entre frames de
+# una misma explosión si sí baja.
+NUM_FRAMES_RANGE = (180, 180)                # largo de la secuencia, múltiplo de BLOCK_SIZE
 
 # En las referencias va de 0.29 a 0.50; acá va más bajo a propósito, porque con
 # el valor real el 41% de las máscaras salía 100% fondo. Cuántos frames
@@ -164,20 +169,30 @@ TRAJECTORY_DURATION_RANGE = (0.30, 0.55)     # tiempo de vuelo, en fracción del
 # su propio rng, después de que acá ya haya que tenerlos listos.
 _MAX_TRAJECTORIES = 70                       # cota superior: main.py sortea menos
 
-# Tope de píxeles NUEVOS por frame para UNA trayectoria (no compartido entre
-# varias, a diferencia del humo). Tasa natural = largo/duración: un lazo (p50
-# 1080px) da ~34 px/frame, una recta (p50 264px) ~8. Por debajo del tope,
-# `_progress_window` (trajectories.py) estira la duración de ESA trayectoria
-# — no toca main.py ni el balance de clase en imagen única, a diferencia de
-# bajar la cantidad. Mismo costo que el humo: estira más allá de lo que valida
-# TRAJECTORY_DURATION_RANGE.
+# Tope de puntos CON TINTA que UNA trayectoria puede estrenar en un frame (no
+# compartido entre varias, a diferencia del humo). Es lo que fija el largo del
+# segmento que se ve por frame, que en las referencias es ~1px (0.13% del ancho
+# medido sobre un bloque real).
 #
-# Medido sobre 965 trayectorias (20 semillas): tasa natural mediana 21 px/frame,
-# p90 115, máx 187. Por debajo de cierto tope la ventana estirada no entra en
-# el tramo y la trayectoria queda TRUNCADA (incompleta, no solo más lenta):
-# 0% en 80, 2% en 60 — aceptado a cambio de bajar el pico un 8% más (662
-# contra 731 px/frame, semilla de prueba).
-MAX_TRAJECTORY_PX_PER_FRAME = 60
+# La vara es la TINTA y no las posiciones del recorrido, y ese fue el arreglo
+# del 2026-08-25. Contando posiciones, el tope de 35 dejaba entrar segmentos de
+# 22-35 px con tinta: el spacing del punteado colapsa a 1 en parte de cada
+# trayectoria —cerca del origen en las rectas, en el ápice en los lazos— y ahí
+# el 44-50% de los huecos vale 1, o sea trazo sólido. Contando tinta, el tope
+# se cumple sea cual sea la geometría. Ver _stamp_progress_ranked.
+#
+# Callejón sin salida ya descartado: bajar la ráfaga (burst_remaining). Medido
+# con contrafáctico sobre 2 semillas, forzarla a 0 deja igual el segmento por
+# frame (p50 36 -> 41) y todavía el 23% de los segmentos por encima de 10px.
+# La ráfaga aporta 2px a una corrida que ya venía de 22-35.
+#
+# Aritmética del tope: una trayectoria necesita tinta/tope frames. Con 180
+# frames el tramo post-ignición son ~139, y la tinta p50 es 85px (recta), 162
+# (sobrevuelo) y 227 (lazo). A 2 px/frame la mediana de las tres entra; el
+# cuarto superior de los lazos no, y queda truncado. Es el precio aceptado:
+# `_stamp_progress_ranked` adelanta el lanzamiento todo lo que puede antes de
+# truncar.
+MAX_TRAJECTORY_PX_PER_FRAME = 2
 
 
 def _distance_to_blast_line(blast_line: np.ndarray, h: int, w: int) -> np.ndarray:
