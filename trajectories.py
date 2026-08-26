@@ -28,6 +28,41 @@ _HEATMAP_KERNEL_SIGMA = 1.6                  # su sigma
 
 _MASK_OFFSETS = (-1, 0)                      # trazo de 2 px en la máscara categórica
 
+# Piso de la separación entre puntos del punteado. Los tres spacings son
+# cuadráticos y se ANULAN en un extremo del recorrido —cerca del origen en la
+# recta, en el ápice en el lazo y el sobrevuelo—, y ahí `next_draw_at` cae a 1:
+# un punto por píxel, o sea trazo sólido. Ese tramo sólido es el que produce los
+# clusters de 2-3 px y el que infla la tinta del lazo por encima de lo que el
+# tramo puede mostrar (ver MAX_TRAJECTORY_PX_PER_FRAME en sequence.py).
+#
+# En las referencias una marca es un punto aislado: extensión lineal p99 0.130%
+# del ancho, que es UN píxel nuestro, y el 61.6% de las marcas no tiene ninguna
+# vecina a menos de 5 px.
+_MIN_DOT_SPACING = 1                         # separación mínima entre puntos, en px
+
+# Tope de puntos del PUNTEADO en una trayectoria. El lazo recorre hasta ~4.300
+# posiciones (semi-eje mayor hasta 0.75 de la diagonal) y con el punteado suelto
+# eso da hasta 619 puntos con tinta — más de los que el tramo post-ignición
+# alcanza a mostrar respetando el tope por frame (ver MAX_TRAJECTORY_PX_PER_FRAME
+# en sequence.py). Esa es la causa de las 3 marcas de una misma trayectoria en un
+# frame: la que no entra se comprime. Acá el piso de separación se sube por
+# trayectoria hasta que su tinta entra — recorre lo mismo con menos puntos, que
+# es además lo que se ve en las referencias (marcas aisladas, no trazo sólido).
+#
+# NO depende de ningún parámetro temporal a propósito: es una propiedad del
+# dibujo, así que la imagen única sigue sin enterarse de la secuencia y el
+# contrato de main.generate_explosion se mantiene.
+#
+# Solo acota el punteado: la tinta continua sobre la periferia fibrosa
+# (_paint_over_filaments) y las ráfagas se suman aparte.
+_MAX_DOTTED_INK = 300                        # puntos del punteado por trayectoria
+
+
+def _min_spacing(total_len: int) -> float:
+    """Piso de separación de ESTA trayectoria: el general, o el que hace falta
+    para que su punteado no pase de _MAX_DOTTED_INK puntos."""
+    return max(_MIN_DOT_SPACING, total_len / _MAX_DOTTED_INK)
+
 
 def _make_gradient_kernel(size: int = _HEATMAP_KERNEL_SIZE, sigma: float = _HEATMAP_KERNEL_SIGMA) -> np.ndarray:
     """Kernel gaussiano radial normalizado a pico 1.0 en el centro."""
@@ -267,6 +302,34 @@ def _paint_traj_mask(mask: np.ndarray, py: int, px: int, h: int, w: int,
 # trazo, el kernel 3x3 del heatmap y los offsets de la máscara.
 _PROGRESS_RADIUS = 1                         # vecindad que se fecha al anotar el progreso
 
+# El fechado va en DOS PLANOS y el centro le gana a la huella, siempre.
+#
+# La huella de un punto hay que fecharla —si no, los píxeles del bloque de
+# ancho, los offsets de máscara y el kernel del heatmap no aparecen en ningún
+# frame—, pero cuando le gana la fecha al CENTRO de otro punto lo adelanta y lo
+# amontona en un frame que no le toca. Con un solo plano eso alcanzaba al 49%
+# de los puntos con tinta, y el 88% de los adelantos venía de una trayectoria
+# dibujada DESPUÉS: proteger solo los centros de la propia trayectoria (lo que
+# hacía el `skip` de la versión anterior) no puede cubrir ese caso, porque esos
+# centros todavía no existen cuando la trayectoria se dibuja.
+#
+# Separando los planos la protección es global y no depende del orden de dibujo.
+# Medido sobre 7 semillas, en la ENTRADA: los clusters de 3+ px caen de 7.63% a
+# 2.74%, el cluster máximo de 10 px a 5, sin truncar tinta de más.
+_CENTERS, _HALO = 0, 1                       # planos de progress_map
+
+
+def new_progress_map(height: int, width: int) -> np.ndarray:
+    """Mapa de fechado vacío, con sus dos planos (ver _CENTERS / _HALO)."""
+    return np.full((2, height, width), np.inf, dtype=np.float32)
+
+
+def resolve_progress(progress_map: np.ndarray) -> np.ndarray:
+    """Aplana los dos planos en el fechado final: manda el centro donde lo hay,
+    y la huella solo cubre los píxeles que ningún centro reclama."""
+    centros, halo = progress_map[_CENTERS], progress_map[_HALO]
+    return np.where(np.isfinite(centros), centros, halo)
+
 
 def _stamp_progress_ranked(
     progress_map: np.ndarray | None,
@@ -345,28 +408,20 @@ def _stamp_progress_ranked(
     lo = min(max(launch, 0.0), max(0.0, 1.0 - paso * tramos))
     paso = min(paso, (1.0 - lo) / tramos)
 
-    # DOS PASADAS, y el orden importa. _stamp_progress fecha un vecindario de
-    # 3x3 —hace falta para cubrir la huella de un punto: bloque de ancho,
-    # offsets de máscara y kernel del heatmap— quedándose con la fecha más
-    # temprana. En un tramo sólido eso hacía que la huella del punto k fechara
-    # el CENTRO del punto k+1, que heredaba la fecha de k y salía en el mismo
-    # frame: el 12.5% de los grupos tenía 3 o más puntos en un frame, contra
-    # 2.3% midiendo con radio 0 (que no sirve como arreglo — deja la huella sin
-    # fechar y esos píxeles no aparecen en ningún frame).
-    #
-    # 1) la huella, salteando los píxeles que son centro de ESTA trayectoria.
-    centros = set(inked)
+    # Cada pasada escribe en su propio plano (ver _CENTERS / _HALO), así que
+    # entre ellas no hay orden que respetar ni centros que saltear: el centro le
+    # gana a la huella al resolver, venga la huella de esta trayectoria o de
+    # cualquier otra.
+    halo, centros = progress_map[_HALO], progress_map[_CENTERS]
     for k, (py, px) in enumerate(inked):
-        _stamp_progress(progress_map, py, px, lo + k * paso, skip=centros)
-    # 2) los centros, cada uno con su propia fecha.
+        _stamp_progress(halo, py, px, lo + k * paso)
     for k, (py, px) in enumerate(inked):
         valor = lo + k * paso
-        if valor < progress_map[py, px]:
-            progress_map[py, px] = valor
+        if valor < centros[py, px]:
+            centros[py, px] = valor
 
 
-def _stamp_progress(progress_map: np.ndarray, py: int, px: int, value: float,
-                    skip: set[tuple[int, int]] | None = None) -> None:
+def _stamp_progress(plano: np.ndarray, py: int, px: int, value: float) -> None:
     """Registra en qué momento del recorrido se alcanza cada píxel, quedándose
     con el más temprano. Es lo que permite armar la secuencia retrocediendo (ver
     sequence.py) sin volver a dibujar la explosión.
@@ -375,21 +430,19 @@ def _stamp_progress(progress_map: np.ndarray, py: int, px: int, value: float,
     referencias una trayectoria parcial es un trazo truncado —la punta avanza y
     lo ya dibujado no cambia de brillo—, no un trazo atenuado.
 
+    Escribe en UN plano de progress_map, no en el mapa entero: quién llama
+    decide si la fecha es de centro o de huella (ver _CENTERS / _HALO).
+
     Ojo en modo ventana: guarda una sola fecha por píxel, así que donde dos
     trayectorias se cruzan la segunda pasada no se registra y el guion puede
     quedar con un hueco de pocos píxeles. No se pierde tinta (la unión de las
     ventanas cubre exactamente el acumulado, verificado).
-
-    `skip` excluye píxeles del vecindario. Lo usa _stamp_progress_ranked para
-    que la huella de un punto no le gane la fecha al centro del punto vecino.
     """
-    h, w = progress_map.shape
+    h, w = plano.shape
     for ny in range(max(py - _PROGRESS_RADIUS, 0), min(py + _PROGRESS_RADIUS + 1, h)):
         for nx in range(max(px - _PROGRESS_RADIUS, 0), min(px + _PROGRESS_RADIUS + 1, w)):
-            if skip is not None and (ny, nx) in skip:
-                continue
-            if value < progress_map[ny, nx]:
-                progress_map[ny, nx] = value
+            if value < plano[ny, nx]:
+                plano[ny, nx] = value
 
 
 def bresenham(y0: int, x0: int, y1: int, x1: int) -> list[tuple[int, int]]:
@@ -457,6 +510,7 @@ def draw_trajectory(
 
     points = bresenham(cy, cx, end_y, end_x)
     total_len = max(len(points), 1)
+    espaciado_min = _min_spacing(total_len)
     brightness_mean = _sample_trajectory_brightness_mean(rng)
     width = _sample_trajectory_width(rng)
     over_smoke, override_contrast = _sample_smoke_override(rng)
@@ -515,7 +569,7 @@ def draw_trajectory(
                 # Spacing cuadrático: ratio² * max_spacing
                 dist_from_origin = np.sqrt((py - oy) ** 2 + (px - ox) ** 2)
                 ratio = min(dist_from_origin / max_dist, 1.0)
-                spacing = ratio ** 2 * max_spacing
+                spacing = max(espaciado_min, ratio ** 2 * max_spacing)
                 next_draw_at = max(1, int(spacing + rng.uniform(-spacing * 0.3, spacing * 0.3)))
                 pixels_since_draw = 0
         else:
@@ -621,6 +675,7 @@ def draw_returning_parabola(
 
     num_steps = max(int(a * sweep), 2)
     total_len = max(num_steps, 1)
+    espaciado_min = _min_spacing(total_len)
     brightness_mean = _sample_trajectory_brightness_mean(rng)
     width = _sample_trajectory_width(rng)
     over_smoke, override_contrast = _sample_smoke_override(rng)
@@ -694,7 +749,7 @@ def draw_returning_parabola(
                     # origen" es el lanzamiento/aterrizaje, donde va más rápido.
                     dist_from_origin = np.sqrt((spy - oy) ** 2 + (spx - ox) ** 2)
                     ratio = min(dist_from_origin / max_dist, 1.0)
-                    spacing = (1 - ratio) ** 2 * max_spacing
+                    spacing = max(espaciado_min, (1 - ratio) ** 2 * max_spacing)
                     next_draw_at = max(1, int(spacing + rng.uniform(-spacing * 0.3, spacing * 0.3)))
                     pixels_since_draw = 0
             else:
@@ -780,6 +835,7 @@ def draw_flyover_trajectory(
 
     num_steps = max(int(a * np.pi), 2)
     total_len = max(num_steps, 1)
+    espaciado_min = _min_spacing(total_len)
     brightness_mean = _sample_trajectory_brightness_mean(rng)
     width = _sample_trajectory_width(rng)
     over_smoke, override_contrast = _sample_smoke_override(rng)
@@ -850,7 +906,7 @@ def draw_flyover_trajectory(
                     # cerca del origen (despegue/aterrizaje) = rápido = disperso.
                     dist_from_origin = np.sqrt((spy - oy) ** 2 + (spx - ox) ** 2)
                     ratio = min(dist_from_origin / max_dist, 1.0)
-                    spacing = (1 - ratio) ** 2 * max_spacing
+                    spacing = max(espaciado_min, (1 - ratio) ** 2 * max_spacing)
                     next_draw_at = max(1, int(spacing + rng.uniform(-spacing * 0.3, spacing * 0.3)))
                     pixels_since_draw = 0
             else:

@@ -34,6 +34,7 @@ from PIL import Image
 
 from main import generate_explosion, HEIGHT, WIDTH
 from export import tensor_to_image, mask_to_rgb, contact_sheet
+from trajectories import new_progress_map, resolve_progress
 
 # El dominio es oscuro (p50 entre 7 y 10 en las referencias) y sin realce las
 # miniaturas del contact sheet se ven negras.
@@ -334,7 +335,7 @@ class _StageRecorder:
                 # no dibujó nada. Fecharlos hacía que compose reemitiera el HUMO a
                 # brillo pleno — el 15% del recorrido, y la mitad de los píxeles
                 # > 100 del canal.
-                progress = s["ctx"]["progress_map"]
+                progress = resolve_progress(s["ctx"]["progress_map"])
                 birth = np.where(np.isfinite(progress) & changed,
                                  self.ignition + progress * self._span, np.inf)
             elif s["name"] in ("smoke", "filaments"):
@@ -491,7 +492,7 @@ def generate_explosion_sequence(
     ignition = max(1, round(num_frames * time_rng.uniform(*PRE_IGNITION_FRACTION_RANGE)))
     last = num_frames - 1
 
-    progress_map = np.full((height, width), np.inf, dtype=np.float32)
+    progress_map = new_progress_map(height, width)
     recorder = _StageRecorder(ignition, last)
     span = max(last - ignition, 1)
 
