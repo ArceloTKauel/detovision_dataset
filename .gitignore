@@ -18,6 +18,11 @@ build/
 
 # Dataset generado
 dataset/
+dataset_sequences/
+
+# Vista previa de sequence.py
+sequence/
+sequence_mask/
 
 # OS
 .DS_Store
