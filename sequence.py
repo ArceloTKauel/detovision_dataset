@@ -175,24 +175,18 @@ _MAX_TRAJECTORIES = 70                       # cota superior: main.py sortea men
 # segmento que se ve por frame, que en las referencias es ~1px (0.13% del ancho
 # medido sobre un bloque real).
 #
-# La vara es la TINTA y no las posiciones del recorrido, y ese fue el arreglo
-# del 2026-08-25. Contando posiciones, el tope de 35 dejaba entrar segmentos de
-# 22-35 px con tinta: el spacing del punteado colapsa a 1 en parte de cada
-# trayectoria —cerca del origen en las rectas, en el ápice en los lazos— y ahí
-# el 44-50% de los huecos vale 1, o sea trazo sólido. Contando tinta, el tope
-# se cumple sea cual sea la geometría. Ver _stamp_progress_ranked.
+# La vara es la TINTA y no las posiciones del recorrido: contando posiciones, un
+# tramo sólido dejaba entrar 22-35 px con tinta bajo un tope de 35. Contando
+# tinta, el tope se cumple sea cual sea la geometría. Ver _stamp_progress_ranked.
 #
-# Callejón sin salida ya descartado: bajar la ráfaga (burst_remaining). Medido
-# con contrafáctico sobre 2 semillas, forzarla a 0 deja igual el segmento por
-# frame (p50 36 -> 41) y todavía el 23% de los segmentos por encima de 10px.
-# La ráfaga aporta 2px a una corrida que ya venía de 22-35.
+# Callejón sin salida ya descartado: bajar la ráfaga (burst_remaining). Forzarla
+# a 0 deja igual el segmento por frame (p50 36 -> 41).
 #
-# Aritmética del tope: una trayectoria necesita tinta/tope frames. Con 180
-# frames el tramo post-ignición son ~139, y la tinta p50 es 85px (recta), 162
-# (sobrevuelo) y 227 (lazo). A 2 px/frame la mediana de las tres entra; el
-# cuarto superior de los lazos no, y queda truncado. Es el precio aceptado:
-# `_stamp_progress_ranked` adelanta el lanzamiento todo lo que puede antes de
-# truncar.
+# Aritmética del tope: una trayectoria necesita tinta/tope frames y el tramo son
+# ~150, o sea 300 puntos. Con _MAX_DOTTED_INK acotando el punteado, la tinta p50
+# es 78 (recta), 94 (sobrevuelo) y 157 (lazo) y el máximo 346, así que solo el
+# 2.4% no entra. Esa no se trunca —dejaría tinta que ningún frame muestra— sino
+# que COMPRIME el paso y supera el tope; es el precio aceptado.
 MAX_TRAJECTORY_PX_PER_FRAME = 2
 
 

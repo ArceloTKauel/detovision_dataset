@@ -28,39 +28,26 @@ _HEATMAP_KERNEL_SIGMA = 1.6                  # su sigma
 
 _MASK_OFFSETS = (-1, 0)                      # trazo de 2 px en la máscara categórica
 
-# Piso de la separación entre puntos del punteado. Los tres spacings son
-# cuadráticos y se ANULAN en un extremo del recorrido —cerca del origen en la
-# recta, en el ápice en el lazo y el sobrevuelo—, y ahí `next_draw_at` cae a 1:
-# un punto por píxel, o sea trazo sólido. Ese tramo sólido es el que produce los
-# clusters de 2-3 px y el que infla la tinta del lazo por encima de lo que el
-# tramo puede mostrar (ver MAX_TRAJECTORY_PX_PER_FRAME en sequence.py).
+# Los tres spacings son cuadráticos y se ANULAN en un extremo del recorrido
+# (origen en la recta, ápice en el lazo y el sobrevuelo): ahí el trazo sale
+# sólido, y ese tramo es el que produce los clusters de 2-3 px y el que le da al
+# lazo hasta 619 puntos con tinta contra los ~300 que el tramo post-ignición
+# muestra sin comprimirse (ver MAX_TRAJECTORY_PX_PER_FRAME en sequence.py) — de
+# ahí salían 3 marcas de una misma trayectoria en un frame. El tope sube el piso
+# por trayectoria hasta que su tinta entra: recorre lo mismo con menos puntos.
 #
-# En las referencias una marca es un punto aislado: extensión lineal p99 0.130%
-# del ancho, que es UN píxel nuestro, y el 61.6% de las marcas no tiene ninguna
-# vecina a menos de 5 px.
+# Contra referencias donde una marca es un punto aislado (p99 = 1 px nuestro,
+# 61.6% sin vecinas a 5 px), con el tope en 300: las marcas con 2+ vecinas caen
+# de 3.82% a 1.05% (real 1.5%) y la clase 2 de 4.25% a 3.52% del cuadro. Bajarlo
+# a 200 deja el trazo MÁS aislado que el real. Solo acota el punteado: la tinta
+# continua sobre filamentos y las ráfagas suman aparte.
 _MIN_DOT_SPACING = 1                         # separación mínima entre puntos, en px
-
-# Tope de puntos del PUNTEADO en una trayectoria. El lazo recorre hasta ~4.300
-# posiciones (semi-eje mayor hasta 0.75 de la diagonal) y con el punteado suelto
-# eso da hasta 619 puntos con tinta — más de los que el tramo post-ignición
-# alcanza a mostrar respetando el tope por frame (ver MAX_TRAJECTORY_PX_PER_FRAME
-# en sequence.py). Esa es la causa de las 3 marcas de una misma trayectoria en un
-# frame: la que no entra se comprime. Acá el piso de separación se sube por
-# trayectoria hasta que su tinta entra — recorre lo mismo con menos puntos, que
-# es además lo que se ve en las referencias (marcas aisladas, no trazo sólido).
-#
-# NO depende de ningún parámetro temporal a propósito: es una propiedad del
-# dibujo, así que la imagen única sigue sin enterarse de la secuencia y el
-# contrato de main.generate_explosion se mantiene.
-#
-# Solo acota el punteado: la tinta continua sobre la periferia fibrosa
-# (_paint_over_filaments) y las ráfagas se suman aparte.
-_MAX_DOTTED_INK = 300                        # puntos del punteado por trayectoria
+_MAX_DOTTED_INK = 300                        # tope de puntos del punteado, por trayectoria
 
 
 def _min_spacing(total_len: int) -> float:
-    """Piso de separación de ESTA trayectoria: el general, o el que hace falta
-    para que su punteado no pase de _MAX_DOTTED_INK puntos."""
+    """Piso de separación de ESTA trayectoria (ver _MAX_DOTTED_INK). Sale del
+    largo del recorrido y no de la secuencia: la imagen única no se entera."""
     return max(_MIN_DOT_SPACING, total_len / _MAX_DOTTED_INK)
 
 
@@ -302,20 +289,13 @@ def _paint_traj_mask(mask: np.ndarray, py: int, px: int, h: int, w: int,
 # trazo, el kernel 3x3 del heatmap y los offsets de la máscara.
 _PROGRESS_RADIUS = 1                         # vecindad que se fecha al anotar el progreso
 
-# El fechado va en DOS PLANOS y el centro le gana a la huella, siempre.
-#
-# La huella de un punto hay que fecharla —si no, los píxeles del bloque de
-# ancho, los offsets de máscara y el kernel del heatmap no aparecen en ningún
-# frame—, pero cuando le gana la fecha al CENTRO de otro punto lo adelanta y lo
-# amontona en un frame que no le toca. Con un solo plano eso alcanzaba al 49%
-# de los puntos con tinta, y el 88% de los adelantos venía de una trayectoria
-# dibujada DESPUÉS: proteger solo los centros de la propia trayectoria (lo que
-# hacía el `skip` de la versión anterior) no puede cubrir ese caso, porque esos
-# centros todavía no existen cuando la trayectoria se dibuja.
-#
-# Separando los planos la protección es global y no depende del orden de dibujo.
-# Medido sobre 7 semillas, en la ENTRADA: los clusters de 3+ px caen de 7.63% a
-# 2.74%, el cluster máximo de 10 px a 5, sin truncar tinta de más.
+# El fechado va en DOS PLANOS y el centro le gana a la huella al resolver. La
+# huella hay que fecharla igual (por eso el radio de arriba), pero cuando le
+# ganaba la fecha al CENTRO de otro punto lo adelantaba: con un plano solo eso
+# alcanzaba al 49% de los puntos con tinta, y el 88% venía de una trayectoria
+# dibujada DESPUÉS —caso que un `skip` de centros propios no puede cubrir, porque
+# esos centros todavía no existen—. Separados, la protección no depende del orden
+# de dibujo: clusters de 3+ px en la entrada 7.63% -> 2.74%, máximo 10 px -> 5.
 _CENTERS, _HALO = 0, 1                       # planos de progress_map
 
 
@@ -408,10 +388,8 @@ def _stamp_progress_ranked(
     lo = min(max(launch, 0.0), max(0.0, 1.0 - paso * tramos))
     paso = min(paso, (1.0 - lo) / tramos)
 
-    # Cada pasada escribe en su propio plano (ver _CENTERS / _HALO), así que
-    # entre ellas no hay orden que respetar ni centros que saltear: el centro le
-    # gana a la huella al resolver, venga la huella de esta trayectoria o de
-    # cualquier otra.
+    # Cada pasada a su plano, así que no hay orden que respetar entre ellas ni
+    # centros que saltear (ver _CENTERS / _HALO).
     halo, centros = progress_map[_HALO], progress_map[_CENTERS]
     for k, (py, px) in enumerate(inked):
         _stamp_progress(halo, py, px, lo + k * paso)
