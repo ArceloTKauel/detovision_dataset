@@ -61,41 +61,67 @@ NUM_FRAMES_RANGE = (180, 180)                # largo de la secuencia, múltiplo 
 # son la señal de "acá no hay nada" y atacan el modo de falla de v18.
 PRE_IGNITION_FRACTION_RANGE = (0.15, 0.30)   # fracción de frames antes de la ignición
 
-# ── Deriva de cámara ───────────────────────────────────────────────────────
-# El terreno no nace ni se intensifica: DERIVA. Un canal del dataset es un
-# absdiff, así que no entra el terreno completo sino su RESIDUO — cuánto cambió al
-# desplazarse la cámara. Con el terreno completo en los 9 canales, el 95% de un
-# canal sintético estaba presente en TODOS los del bloque contra el 4% del real, y
-# la regla más fácil de aprender pasaba a ser "lo que no cambia es fondo": el modo
-# de falla de v18.
+# ── Movimiento de cámara ───────────────────────────────────────────────────
+# El terreno no nace ni se intensifica: la cámara se mueve sobre él. Un canal del
+# dataset es un absdiff, así que no entra el terreno completo sino su RESIDUO, que
+# vale |∇terreno| por el desplazamiento. Con el terreno completo en los 9 canales,
+# el 95% de un canal sintético estaba presente en TODOS los del bloque contra el 4%
+# del real, y la regla más fácil de aprender pasaba a ser "lo que no cambia es
+# fondo": el modo de falla de v18.
 #
-# Objetivo del canal real: media 0.8-1.4, p90 2-3, p99 5-7. Con (2.0, 3.0) entran
-# la media (0.92) y el p90 (3); el p99 no (14 contra 5-7), porque las curvas de
-# nivel sintéticas son bordes duros y desplazar un borde duro devuelve su amplitud
-# entera. Atacar la cola pide ablandar terrain.py, no mover esto.
+# Medido sobre 4 videos reales (2026-08-28, Lucas-Kanade de 4 parámetros validado
+# contra verdad conocida y contra correlación de fase): el dron está casi quieto —
+# 0.017 px por frame en nuestro lienzo, 2.7 px acumulados en 180. Que el mecanismo
+# es geométrico y no ruido se comprobó viendo que el residuo CRECE con la
+# separación temporal: a 40 frames de distancia |∇|·|d| acierta con 2% de error.
 #
-# TRAMPA al re-medir: hay que sacar el terreno con un observer sobre la etapa
-# "terrain", no llamando a _terrain_blotch_brightness aparte (sobre el campo
-# suelto los números dan casi el doble), y con muchas semillas —
-# TERRAIN_INTENSITY_RANGE varía el brillo 20x entre imágenes.
-TERRAIN_DRIFT_RANGE = (2.0, 3.0)             # deriva de cámara, px por frame
+# Acá el paso va mucho más alto que el real a propósito, y no es un descuido: a
+# 768 px no se puede representar el detalle fino que tiene el terreno a 3840, así
+# que nuestro campo tiene mucho menos gradiente y necesita más desplazamiento para
+# el mismo residuo. Lo que se calibra es el RESIDUO, que es lo que consume el
+# modelo. Va atado a TERRAIN_BLUR_RADIUS: ablandar el campo baja el residuo y hay
+# que subir el paso para compensar.
+TERRAIN_STEP_RANGE = (1.0, 1.6)              # desplazamiento por frame, en px
 
-# No es realismo: es lo que diferencia los canales entre sí. El residuo es grande
-# donde el desplazamiento cruza una curva de nivel y nulo donde corre paralelo,
-# así que con rumbo FIJO se encienden siempre las mismas y los 9 canales quedan
-# casi iguales. El precio es que a veces un frame sale casi vacío; bajarlo lo
-# empeora, porque daría secuencias enteras flojas en vez de un frame suelto.
-TERRAIN_DRIFT_TURN_STD = 0.25                # viraje del rumbo por frame, en radianes
+# El residuo es grande donde el desplazamiento cruza una curva de nivel y nulo
+# donde corre paralelo, así que con rumbo FIJO se encienden siempre las mismas y
+# los 9 canales quedan casi iguales. Que el rumbo vire es lo que apaga unos
+# sectores y enciende otros, que es como se ve el terreno real entre frames.
+TERRAIN_TURN_STD = 0.9                       # viraje del rumbo por frame, en radianes
 
-# Al llegar al borde el rumbo REBOTA. Hace falta acotar porque 90 frames a 1-2 px
-# son más de 100 px sobre un cuadro de 512, y como los bordes se replican esa
-# franja queda con residuo cero. Rebote y no reversión al origen: el tirón le come
-# el paso a la cámara (medido, reversión 0.15 da media 0.21 contra 0.57 rebotando).
-# Apretar la caja no cuesta nada: paso efectivo 1.37 con 12 px contra 1.40 con 100.
-TERRAIN_DRIFT_MAX_OFFSET = 12.0              # caja donde vagabundea la cámara, en px
+# Rotación y escala son los otros dos grados de libertad del dron. Aportan lo que
+# la traslación no puede: un residuo NO uniforme, nulo en el centro y creciendo con
+# el radio. A 460 px del centro estos valores pesan como la traslación. Van sin
+# acotar: son paseos aleatorios y en 180 frames acumulan 0.27° y 0.27%.
+TERRAIN_ROTATION_STD = 0.02                  # rotación por frame, en grados
+TERRAIN_SCALE_STD    = 0.02                  # cambio de escala por frame, en %
+
+# Al llegar al borde el rumbo REBOTA. Acotar hace falta porque el máximo temporal
+# de los residuos —la vista acumulada— se emborrona tanto como haya vagado la
+# cámara, y en el real esa vista es nítida. Rebote y no reversión al origen: el
+# tirón le come el paso a la cámara (medido, reversión 0.15 da media 0.21 contra
+# 0.57 rebotando).
+TERRAIN_MAX_OFFSET = 3.0                     # caja donde vagabundea la cámara, en px
+
+# ── Piso de ruido ──────────────────────────────────────────────────────────
+# El movimiento explica la ESTRUCTURA del residuo pero no su nivel: a un frame de
+# distancia el real mide 0.62 y el movimiento solo predice 0.14. El resto es ruido
+# de sensor, y es lo que decorrelaciona los canales entre sí — a escala de píxel el
+# real correlaciona 0.25 entre frames consecutivos, contra 0.53 a escala de bloque.
+#
+# No es un artificio: a resolución nativa el ruido enciende el 48% de los píxeles
+# con valor 1, y promediar los 25 que caen en un píxel nuestro da un nivel casi
+# constante bajo uno. Por eso la media es alta y la dispersión chica.
+#
+# El ruido NO es blanco: se sortea en una grilla más gruesa y se estira. Un píxel
+# nuestro promedia 25 nativos, así que dos vecinos comparten vecindario y el grano
+# real queda correlacionado (ac1 0.58). Con ruido blanco el grano bajaba a 0.23.
+TERRAIN_NOISE_MEAN = 0.45                    # nivel del ruido por frame, en grises
+TERRAIN_NOISE_STD  = 0.35                    # su dispersión, en grises
+TERRAIN_NOISE_CELL = 6                       # grano del ruido, en px
 
 # Callejón sin salida: la RAMPA del terreno durante la fase pre-explosión. Venía
-# de heatmaps ACUMULADOS; en diferencias no aplica, una cámara que deriva a ritmo
+# de heatmaps ACUMULADOS; en diferencias no aplica, una cámara que se mueve a ritmo
 # parejo produce residuo constante.
 
 # ── Crecimiento de la pluma ────────────────────────────────────────────────
@@ -366,53 +392,67 @@ class _StageRecorder:
         return layers
 
 
-def _terrain_drift(num_frames: int, time_rng: np.random.Generator) -> np.ndarray:
-    """Posición de la cámara frame a frame, en píxeles: (num_frames + 1, 2). Una
-    fila de más porque el frame 0 también es una diferencia y necesita de dónde
-    venir. Ver las tres constantes TERRAIN_DRIFT_*.
+def _terrain_pose(num_frames: int, time_rng: np.random.Generator) -> np.ndarray:
+    """Pose de la cámara frame a frame: (num_frames + 1, 4) con (dy, dx, ángulo en
+    grados, escala en %). Una fila de más porque el frame 0 también es una
+    diferencia y necesita de dónde venir. Ver las constantes TERRAIN_*.
 
     El rebote se aplica sobre la posición ya avanzada, doblándola contra la pared:
     el camino recorrido en ese frame sigue midiendo `step`, que es lo que mantiene
     las estadísticas del residuo donde se las calibró."""
-    step = time_rng.uniform(*TERRAIN_DRIFT_RANGE)
+    step = time_rng.uniform(*TERRAIN_STEP_RANGE)
     heading = time_rng.uniform(0.0, 2 * np.pi)
-    turns = time_rng.normal(0.0, TERRAIN_DRIFT_TURN_STD, size=num_frames)
-    limit = TERRAIN_DRIFT_MAX_OFFSET
+    turns = time_rng.normal(0.0, TERRAIN_TURN_STD, size=num_frames)
+    spins = time_rng.normal(0.0, TERRAIN_ROTATION_STD, size=num_frames)
+    zooms = time_rng.normal(0.0, TERRAIN_SCALE_STD, size=num_frames)
+    limit = TERRAIN_MAX_OFFSET
 
-    offsets = np.zeros((num_frames + 1, 2), dtype=np.float32)
-    for i, turn in enumerate(turns, start=1):
-        heading += turn
-        y = offsets[i - 1][0] + step * np.sin(heading)
-        x = offsets[i - 1][1] + step * np.cos(heading)
+    pose = np.zeros((num_frames + 1, 4), dtype=np.float32)
+    for i in range(1, num_frames + 1):
+        heading += turns[i - 1]
+        y = pose[i - 1][0] + step * np.sin(heading)
+        x = pose[i - 1][1] + step * np.cos(heading)
         if abs(y) > limit:
             y = np.copysign(2 * limit, y) - y
             heading = -heading
         if abs(x) > limit:
             x = np.copysign(2 * limit, x) - x
             heading = np.pi - heading
-        offsets[i] = (y, x)
-    return offsets
+        pose[i] = (y, x, pose[i - 1][2] + spins[i - 1], pose[i - 1][3] + zooms[i - 1])
+    return pose
 
 
-def _shift(field: np.ndarray, dy: float, dx: float) -> np.ndarray:
-    """Traslada un campo (dy, dx) píxeles con interpolación bilineal.
+def _warp_grid(h: int, w: int):
+    """Coordenadas centradas del lienzo, para no rearmarlas en cada frame."""
+    yy, xx = np.mgrid[0:h, 0:w]
+    return (yy - (h - 1) / 2.0).astype(np.float32), (xx - (w - 1) / 2.0).astype(np.float32)
+
+
+def _warp_affine(field: np.ndarray, pose: np.ndarray, grid) -> np.ndarray:
+    """Aplica la pose al campo con interpolación bilineal: traslación, rotación
+    alrededor del centro y escala.
 
     Los bordes se replican: un wraparound metería un salto de un lado al otro del
-    cuadro que en el residuo se vería como una franja encendida. Los índices se
-    arman por eje porque una traslación es separable."""
+    cuadro que en el residuo se vería como una franja encendida."""
     h, w = field.shape
-    yy = np.clip(np.arange(h, dtype=np.float32) - dy, 0, h - 1)
-    xx = np.clip(np.arange(w, dtype=np.float32) - dx, 0, w - 1)
-    y0 = np.floor(yy).astype(np.int32)
-    x0 = np.floor(xx).astype(np.int32)
-    y1 = np.minimum(y0 + 1, h - 1)
-    x1 = np.minimum(x0 + 1, w - 1)
-    fy = (yy - y0)[:, None]
-    fx = (xx - x0)[None, :]
-    return (field[np.ix_(y0, x0)] * (1 - fy) * (1 - fx) +
-            field[np.ix_(y1, x0)] * fy * (1 - fx) +
-            field[np.ix_(y0, x1)] * (1 - fy) * fx +
-            field[np.ix_(y1, x1)] * fy * fx)
+    dy, dx, angle, zoom = pose
+    v, u = grid
+
+    radians = np.deg2rad(angle)
+    scale = 1.0 + zoom / 100.0
+    cos_a, sin_a = np.cos(radians) * scale, np.sin(radians) * scale
+
+    src_x = cos_a * (u - dx) - sin_a * (v - dy) + (w - 1) / 2.0
+    src_y = sin_a * (u - dx) + cos_a * (v - dy) + (h - 1) / 2.0
+    np.clip(src_x, 0, w - 1.001, out=src_x)
+    np.clip(src_y, 0, h - 1.001, out=src_y)
+
+    x0 = src_x.astype(np.int32)
+    y0 = src_y.astype(np.int32)
+    fx = src_x - x0
+    fy = src_y - y0
+    return (field[y0, x0] * (1 - fy) * (1 - fx) + field[y0, x0 + 1] * (1 - fy) * fx +
+            field[y0 + 1, x0] * fy * (1 - fx) + field[y0 + 1, x0 + 1] * fy * fx)
 
 
 def _burst_field(height: int, width: int, time_rng: np.random.Generator) -> np.ndarray:
@@ -426,19 +466,26 @@ def _burst_field(height: int, width: int, time_rng: np.random.Generator) -> np.n
     return np.asarray(Image.fromarray(small).resize((width, height), Image.BILINEAR))
 
 
-def _terrain_residuals(terrain: np.ndarray, offsets: np.ndarray):
-    """Terreno de cada frame: |terreno(t) - terreno(t-1)|, lo mismo que deja un
-    absdiff entre dos frames de video.
+def _terrain_residuals(terrain: np.ndarray, poses: np.ndarray,
+                       time_rng: np.random.Generator):
+    """Terreno de cada frame: |terreno(t) - terreno(t-1)| más el piso de ruido, lo
+    mismo que deja un absdiff entre dos frames de video.
 
-    Generador y no lista: guardar los 90 serían ~140 MB por worker, y
+    Generador y no lista: guardar los 180 serían ~280 MB por worker, y
     generate_sequence_dataset.py corre una docena en paralelo.
 
     Se redondea en vez de truncar: truncar la interpolación bilineal bajaría la
-    media medio nivel de gris, y la media objetivo es 0.8-1.4."""
-    previous = _shift(terrain, *offsets[0])
-    for offset in offsets[1:]:
-        current = _shift(terrain, *offset)
-        yield np.rint(np.abs(current - previous)).astype(np.uint8)
+    media medio nivel de gris, y el residuo real mide 0.76 de media."""
+    h, w = terrain.shape
+    grid = _warp_grid(h, w)
+    cell = TERRAIN_NOISE_CELL
+    previous = _warp_affine(terrain, poses[0], grid)
+    for pose in poses[1:]:
+        current = _warp_affine(terrain, pose, grid)
+        small = time_rng.normal(TERRAIN_NOISE_MEAN, TERRAIN_NOISE_STD,
+                                size=(max(2, h // cell), max(2, w // cell))).astype(np.float32)
+        noise = np.asarray(Image.fromarray(small, mode="F").resize((w, h), Image.BILINEAR))
+        yield np.clip(np.rint(np.abs(current - previous) + noise), 0, 255).astype(np.uint8)
         previous = current
 
 
@@ -499,10 +546,10 @@ def generate_explosion_sequence(
         progress_rate_limit=1.0 / (MAX_TRAJECTORY_PX_PER_FRAME * span),
     )
 
-    # La deriva se sortea siempre, aunque el modo acumulado no la use: así los
+    # La pose se sortea siempre, aunque el modo acumulado no la use: así los
     # dos modos consumen `time_rng` igual y la misma semilla da la misma
     # estructura temporal en ambos.
-    drift = _terrain_drift(num_frames, time_rng)
+    poses = _terrain_pose(num_frames, time_rng)
     terrain = recorder.terrain.astype(np.float32)
     layers = recorder.finalize()
 
@@ -578,7 +625,7 @@ def generate_explosion_sequence(
     # frame con generate_explosion.
     if windowed:
         frames = [compose(t, True, terrain_frame) for t, terrain_frame
-                  in enumerate(_terrain_residuals(terrain, drift))]
+                  in enumerate(_terrain_residuals(terrain, poses, time_rng))]
     else:
         frames = [compose(t, False, terrain) for t in range(num_frames)]
 
