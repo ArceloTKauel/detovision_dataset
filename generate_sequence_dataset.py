@@ -6,17 +6,20 @@ ventanas: cada frame muestra solo lo que nace en su tramo, no el acumulado (ver
 sequence.py).
 
 La unidad de entrenamiento es un BLOQUE de BLOCK_SIZE frames consecutivos, que el
-modelo recibe apilados como canales — (batch, 9, alto, ancho) — con UNA máscara
-por bloque, la unión de lo que muestran sus frames.
+modelo recibe apilados como canales — (batch, 9, alto, ancho) — y devuelve UNA
+máscara POR FRAME: (batch, 9, 3, alto, ancho).
 
-Estructura de salida, mismo stem para que la correspondencia sea obvia:
-    dataset_sequences/inputs/00000_00/000.png ... 008.png   9 canales
-    dataset_sequences/targets/00000_00.png                  máscara RGB
+Estructura de salida, misma ruta relativa en los dos lados:
+    dataset_sequences/inputs/00000_00/000.png ... 008.png   9 frames, escala de grises
+    dataset_sequences/targets/00000_00/000.png ... 008.png  9 máscaras RGB
 
-Por qué el target es la unión del bloque y no el acumulado desde el principio:
-cada bloque es una pasada independiente del modelo, que no vio los anteriores.
-Pedirle el acumulado sería pedirle que recuerde algo que no está en su entrada;
-si producción quiere un heatmap corrido, acumula las salidas del modelo.
+La correspondencia es 1 a 1: `targets/X/00k.png` es la máscara de `inputs/X/00k.png`.
+
+Antes el target era UNO por bloque, la unión de los 9 frames (`_block_union`, ganaba
+el evento más tardío). El bloque sigue entrando junto —los 9 frames son el contexto
+temporal que necesita para distinguir un evento del terreno— pero ahora se le pide
+segmentar cada uno, no resumirlos: la unión perdía CUÁNDO pasó cada cosa, que es
+justo la información que el formato temporal vino a agregar.
 """
 
 import os
@@ -48,29 +51,13 @@ BLOCK_SIZE = 9                               # frames apilados como canales
 _TIME_SEED_OFFSET = 10_000_000               # separa el stream temporal del de la explosión
 
 
-def _block_union(block):
-    """Máscara y heatmap del bloque: lo que muestran sus frames juntos.
-
-    Un píxel puede aparecer en varios frames con clases distintas —una trayectoria
-    sobre donde antes hubo humo— y gana el más tardío, el último evento del bloque.
-    Por eso mask y heatmap se copian juntos, ceros incluidos.
-
-    Cuenta como tocado si tiene mask O heatmap: mask_to_rgb escribe la clase
-    trayectoria desde `heatmap > 0`, y hay ~16.700 píxeles por secuencia con
-    heatmap sin mask. Filtrando solo por mask, esos quedaban como fondo acá y como
-    trayectoria en el target de imagen única.
-    """
-    mask = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
-    heatmap = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
-    for _, m, h in block:
-        tocado = (m > 0) | (h > 0)
-        mask[tocado] = m[tocado]
-        heatmap[tocado] = h[tocado]
-    return mask, heatmap
-
-
 def generate_single(index: int) -> int:
-    """Worker: genera una secuencia, la corta en bloques y los guarda a disco."""
+    """Worker: genera una secuencia, la corta en bloques y los guarda a disco.
+
+    Cada frame se escribe con su propia máscara y el mismo nombre relativo, así que
+    emparejar entrada y target del lado del modelo es cambiar `inputs` por
+    `targets` en la ruta.
+    """
     frames = generate_explosion_sequence(
         HEIGHT, WIDTH,
         np.random.default_rng(index),
@@ -83,12 +70,13 @@ def generate_single(index: int) -> int:
         name = f"{index:05d}_{b:02d}"
 
         input_dir = os.path.join(DATASET_DIR, "inputs", name)
+        target_dir = os.path.join(DATASET_DIR, "targets", name)
         os.makedirs(input_dir, exist_ok=True)
-        for i, (tensor, _, _) in enumerate(block):
-            tensor_to_image(tensor, os.path.join(input_dir, f"{i:03d}.png"))
+        os.makedirs(target_dir, exist_ok=True)
 
-        mask, heatmap = _block_union(block)
-        mask_to_rgb(mask, heatmap, os.path.join(DATASET_DIR, "targets", f"{name}.png"))
+        for i, (tensor, mask, heatmap) in enumerate(block):
+            tensor_to_image(tensor, os.path.join(input_dir, f"{i:03d}.png"))
+            mask_to_rgb(mask, heatmap, os.path.join(target_dir, f"{i:03d}.png"))
 
     return blocks
 
