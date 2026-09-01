@@ -34,6 +34,27 @@ TERRAIN_PROB = 1.0                           # probabilidad de que la imagen lle
 TERRAIN_OCTAVES     = 8                      # octavas del ruido fractal
 TERRAIN_OCTAVE_GAIN = 0.1                    # tope de amplitud de la octava i: (i+1)*gain
 
+# ── Dirección dominante ────────────────────────────────────────────────────
+# Un banco real está cortado en bermas paralelas, así que su relieve tiene
+# lineamientos largos en una dirección. Medido sobre 9 frames quietos de los 8
+# videos (razón entre autovalores de la matriz de estructura, sobre bloques de
+# 8x8): el real va de 1.28 a 2.60 y el ruido fractal isótropo daba 1.00-1.30 —
+# era la única de las ocho varas fuera de rango.
+#
+# Se estira la grilla de cada octava en una sola dirección y después se rota el
+# campo entero a un ángulo sorteado. El estirado va en la grilla y no en un
+# resize posterior porque estirar después agranda TODAS las escalas por igual y
+# el grano fino se pierde; estirando la grilla, solo se alargan las estructuras.
+#
+# El valor va MUY por encima de lo que se lee en el residuo, y no es un descuido:
+# el residuo es |∇campo·desplazamiento|, que rectifica la dirección, y encima el
+# piso de ruido es isótropo. Medido, un campo con anisotropía 4.5 deja un residuo
+# de 1.0-1.8. Barrido de 1 a 30 (2026-08-31): la respuesta es monótona y con este
+# rango el residuo da 1.55, contra 1.28-2.60 del real. La otra palanca es bajar
+# TERRAIN_WARP_STRENGTH —a (1, 8) sube a 1.82— pero eso devuelve el campo a
+# manchas isótropas, así que se prefiere alargar más y no distorsionar menos.
+TERRAIN_ELONGATION = (4.0, 10.0)             # cuánto se alarga el relieve en su dirección
+
 # ── Distorsión del dominio ─────────────────────────────────────────────────
 # El ingrediente que convierte ruido fractal en relieve: cada píxel se lee de otra
 # posición, desplazada por un segundo campo fractal. Sin esto el campo son manchas
@@ -60,7 +81,12 @@ TERRAIN_WARP_STRENGTH = (1.0, 64.0)          # desplazamiento máximo del domini
 TERRAIN_CURVE_ANCHORS = (6, 14)              # puntos de anclaje de la curva
 
 # ── Brillo ─────────────────────────────────────────────────────────────────
-TERRAIN_BLOTCH_MAX_VAL  = (15, 55)           # brillo máximo del campo, antes de intensity
+# Bajado de (15, 55) el 2026-08-31: alargar el relieve subió el brillo del campo un
+# 60% por sí solo (media 6.97 -> 11.13), y con él el residuo se fue por encima del
+# real (media hasta 1.9 contra 1.37). El factor 0.65 sale de un barrido de 5 puntos:
+# es donde la media vuelve al rango real perdiendo lo menos posible de anisotropía,
+# que se apaga al bajar el nivel porque el piso de ruido isótropo pesa más.
+TERRAIN_BLOTCH_MAX_VAL  = (10, 36)           # brillo máximo del campo, antes de intensity
 TERRAIN_INTENSITY_RANGE = (0.05, 1.0)        # brillo global: varía 20x entre imágenes
 
 # El blur no es cosmético: define el ANCHO del residuo, porque desplazar un borde
@@ -77,7 +103,7 @@ def _stretch_to_unit_range(field):
     return field / (field.max() + 1e-8)
 
 
-def _fractal_noise(h, w, channels, rng):
+def _fractal_noise(h, w, channels, rng, elongation=1.0):
     """Campo [h, w, channels] de ruido fractal gaussiano.
 
     Sobre `rng` y no sobre el estado global de numpy, para que la generación quede
@@ -86,12 +112,15 @@ def _fractal_noise(h, w, channels, rng):
     El notebook estira cada octava con `cv2.resize(x, (h, w))`, que pasa los
     argumentos al revés de lo que cv2 espera; no se nota porque ahí las imágenes
     son cuadradas. Acá el lienzo es 768x512 y se resuelve bien.
+
+    `elongation` adelgaza la grilla en x, así que al estirarla a [h, w] las
+    estructuras salen alargadas en esa dirección (ver TERRAIN_ELONGATION).
     """
     field = np.zeros((h, w, channels), dtype=np.float32)
     for octave in range(TERRAIN_OCTAVES):
         amplitude = rng.uniform(0.0, (octave + 1) * TERRAIN_OCTAVE_GAIN)
         oh = max(2, h // (2 ** octave))
-        ow = max(2, w // (2 ** octave))
+        ow = max(2, int(w // (2 ** octave * elongation)))
         layer = rng.normal(0.0, 1.0, size=(oh, ow, channels)).astype(np.float32)
         if (oh, ow) != (h, w):
             layer = np.stack([
@@ -130,10 +159,30 @@ def _transfer_curve(rng):
     return _stretch_to_unit_range(curve.astype(np.float32))
 
 
+def _oriented_relief(h, w, rng):
+    """Relieve con una dirección dominante sorteada: ruido alargado en x y rotado.
+
+    Se genera sobre un cuadrado del tamaño de la diagonal y se recorta el centro,
+    porque rotar el lienzo justo dejaría las esquinas vacías. El ángulo va en
+    [0, 180): un lineamiento no tiene sentido, girarlo media vuelta da el mismo.
+    """
+    side = int(np.ceil(np.hypot(h, w)))
+    field = _fractal_noise(side, side, 1, rng, rng.uniform(*TERRAIN_ELONGATION))[..., 0]
+
+    rotated = Image.fromarray(field, mode="F").rotate(
+        rng.uniform(0.0, 180.0), Image.BILINEAR)
+    top, left = (side - h) // 2, (side - w) // 2
+    return np.asarray(rotated, dtype=np.float32)[top:top + h, left:left + w]
+
+
 def terrain_field(h, w, rng):
-    """Campo de relieve [h, w] en [0, 1]: ruido fractal, distorsionado en el
-    dominio y pasado por la curva de transferencia."""
-    relief = _stretch_to_unit_range(_fractal_noise(h, w, 1, rng)[..., 0])
+    """Campo de relieve [h, w] en [0, 1]: ruido fractal orientado, distorsionado
+    en el dominio y pasado por la curva de transferencia.
+
+    La distorsión va DESPUÉS de orientar: aplicada antes, la rotación arrastraría
+    un campo ya deformado y los lineamientos saldrían más rectos de lo que son.
+    """
+    relief = _stretch_to_unit_range(_oriented_relief(h, w, rng))
     relief = _domain_warp(relief, rng)
     curve = _transfer_curve(rng)
     return curve[np.clip(relief * 255.0, 0, 255).astype(np.int32)]
