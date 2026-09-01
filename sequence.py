@@ -24,6 +24,9 @@ Uso de la vista previa:
     uv run sequence.py 7               semilla fija, para comparar cambios
     uv run sequence.py 7 36            largo distinto sin tocar la constante
     uv run sequence.py 7 36 acc        el mismo caso en modo acumulado
+
+Las imágenes de `sequence/` salen realzadas ×10 (ver PREVIEW_GAIN): a ×1 el dominio
+es negro y no se distingue el terreno. El dataset se escribe a ×1.
 """
 
 import os
@@ -36,9 +39,17 @@ from main import generate_explosion, HEIGHT, WIDTH
 from export import tensor_to_image, mask_to_rgb, contact_sheet
 from trajectories import new_progress_map, resolve_progress
 
-# El dominio es oscuro (p50 entre 7 y 10 en las referencias) y sin realce las
-# miniaturas del contact sheet se ven negras.
-SHEET_BRIGHTNESS = 3.5                       # realce del contact sheet
+# El dominio es MUY oscuro: medido sobre ESS_F04 en crudo, un frame con la pluma
+# formada tiene p50 0.7 y solo el 2% del cuadro pasa de 5. El terreno vive en 0-6 y
+# a ×1 se ve negro — en el real igual, por eso las referencias de bloques vienen
+# multiplicadas por 10. La vista previa usa esa misma ganancia para que se pueda
+# comparar contra ellas de un vistazo.
+#
+# OJO: se aplica a los PNG de `sequence/` Y al contact sheet. El dataset lo escribe
+# generate_sequence_dataset.py a ×1 y no pasa por acá. NO medir brillo sobre estas
+# imágenes: calibrar contra una referencia amplificada ya costó un revert (commit
+# 50ac264, SMOKE_TURBULENCE_PROB 0.14 -> 0.60).
+PREVIEW_GAIN = 10.0                          # realce de la vista previa, como las referencias
 
 PREVIEW_DIR = "sequence"                     # frames de la vista previa
 PREVIEW_MASK_DIR = "sequence_mask"           # sus máscaras
@@ -674,7 +685,7 @@ def main():
     for i, (tensor, mask, heatmap) in enumerate(frames):
         tensor_path = os.path.join(PREVIEW_DIR, f"{i:02d}.png")
         mask_path = os.path.join(PREVIEW_MASK_DIR, f"{i:02d}.png")
-        tensor_to_image(tensor, tensor_path)
+        tensor_to_image(tensor, tensor_path, PREVIEW_GAIN)
         mask_to_rgb(mask, heatmap, mask_path)
         tensor_paths.append(tensor_path)
         mask_paths.append(mask_path)
@@ -682,10 +693,11 @@ def main():
     # Fuera de la numeración de los frames: es el target denso del bloque, no un
     # frame más de la secuencia.
     final_tensor, final_mask, final_heatmap = final
-    tensor_to_image(final_tensor, os.path.join(PREVIEW_DIR, "final.png"))
+    tensor_to_image(final_tensor, os.path.join(PREVIEW_DIR, "final.png"), PREVIEW_GAIN)
     mask_to_rgb(final_mask, final_heatmap, os.path.join(PREVIEW_MASK_DIR, "final.png"))
 
-    contact_sheet(tensor_paths, os.path.join(PREVIEW_DIR, "sheet.png"), SHEET_BRIGHTNESS)
+    # Los frames ya vienen realzados: el sheet solo los apila.
+    contact_sheet(tensor_paths, os.path.join(PREVIEW_DIR, "sheet.png"))
     contact_sheet(mask_paths, os.path.join(PREVIEW_MASK_DIR, "sheet.png"))
     print(f"{len(frames)} frames -> {PREVIEW_DIR}/NN.png / {PREVIEW_MASK_DIR}/NN.png")
     print(f"final    -> {PREVIEW_DIR}/final.png / {PREVIEW_MASK_DIR}/final.png")

@@ -14,8 +14,15 @@ CONTACT_SHEET_TILE = (384, 256)              # tamaño de cada miniatura, en px
 _LABEL_HEIGHT = 18                           # alto de la banda con el número, en px
 
 
-def tensor_to_image(tensor: np.ndarray, path: str) -> None:
-    """Guarda un tensor 2D uint8 como PNG en escala de grises."""
+def tensor_to_image(tensor: np.ndarray, path: str, gain: float = 1.0) -> None:
+    """Guarda un tensor 2D uint8 como PNG en escala de grises.
+
+    `gain` es SOLO para vistas previas: el dominio es tan oscuro que a ×1 un frame
+    se ve negro entero —el real también, por eso las referencias de bloques vienen
+    multiplicadas por 10—. El dataset se escribe siempre a ×1; ver la advertencia
+    de sequence.py::PREVIEW_GAIN antes de medir nada sobre una imagen realzada."""
+    if gain != 1.0:
+        tensor = np.clip(tensor.astype(np.float32) * gain, 0, 255).astype(np.uint8)
     image = Image.fromarray(tensor, mode="L")
     image.save(path)
 
